@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { Rss, BookOpen, ArrowLeft } from 'lucide-react';
+import { ThemeToggle } from '@/components/ThemeToggle';
 
 export const metadata: Metadata = {
   title: 'Methodology',
@@ -37,6 +38,7 @@ export default function MethodologyPage() {
             >
               <Rss className="h-4 w-4" />
             </a>
+            <ThemeToggle />
           </div>
         </div>
       </header>
