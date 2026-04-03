@@ -7,6 +7,7 @@ import { format, parseISO } from 'date-fns';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Badge } from '@/components/ui/badge';
+import { ThemeToggle } from '@/components/ThemeToggle';
 
 type Props = {
   params: Promise<{ slug: string }>;
@@ -85,7 +86,7 @@ export default async function BlogPostPage({ params }: Props) {
         dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
       />
       <header className="border-b border-border">
-        <div className="mx-auto max-w-3xl px-6 py-4">
+        <div className="mx-auto max-w-3xl px-6 py-4 flex items-center justify-between">
           <Link
             href="/blog"
             className="flex items-center gap-2 text-muted-foreground hover:text-foreground transition-colors"
@@ -93,6 +94,7 @@ export default async function BlogPostPage({ params }: Props) {
             <ArrowLeft className="h-4 w-4" />
             <span className="text-sm">All Briefings</span>
           </Link>
+          <ThemeToggle />
         </div>
       </header>
 
