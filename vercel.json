@@ -1,0 +1,20 @@
+{
+  "crons": [
+    {
+      "path": "/api/generate-daily-briefing",
+      "schedule": "0 6 * * *"
+    },
+    {
+      "path": "/api/tweet-daily-brief",
+      "schedule": "0 7 * * *"
+    },
+    {
+      "path": "/api/detect-breaking-news",
+      "schedule": "0 */4 * * *"
+    },
+    {
+      "path": "/api/send-newsletter",
+      "schedule": "0 8 * * 1"
+    }
+  ]
+}
