@@ -13,6 +13,11 @@ const inter = Inter({ variable: "--font-sans", subsets: ["latin"] });
 export const metadata: Metadata = {
   title: { default: "AI Job Clock", template: "%s | AI Job Clock" },
   description: "Tracking how AI is reshaping the job market — in real time.",
+  alternates: {
+    types: {
+      'application/rss+xml': '/api/rss',
+    },
+  },
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

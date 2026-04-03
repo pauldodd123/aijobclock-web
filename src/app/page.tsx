@@ -92,7 +92,7 @@ export default function Home() {
             ))}
             <div className="w-px h-4 bg-border mx-0.5 sm:mx-1" />
             <a
-              href={`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/rss-feed`}
+              href="/api/rss"
               target="_blank"
               rel="noopener noreferrer"
               className="p-1 sm:p-1.5 text-muted-foreground hover:text-foreground transition-colors rounded-md hover:bg-muted"
@@ -193,7 +193,7 @@ export default function Home() {
               Blog
             </Link>
             <a
-              href={`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/rss-feed`}
+              href="/api/rss"
               target="_blank"
               rel="noopener noreferrer"
               className="hover:text-foreground transition-colors"

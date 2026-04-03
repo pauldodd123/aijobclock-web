@@ -30,7 +30,7 @@ export default function MethodologyPage() {
               <BookOpen className="h-4 w-4" />
             </Link>
             <a
-              href={`${process.env.NEXT_PUBLIC_SUPABASE_URL}/functions/v1/rss-feed`}
+              href="/api/rss"
               target="_blank"
               rel="noopener noreferrer"
               className="text-muted-foreground hover:text-foreground transition-colors"
