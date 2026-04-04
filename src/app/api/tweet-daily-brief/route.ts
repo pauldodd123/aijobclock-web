@@ -612,3 +612,260 @@ For each sector teaser, keep it under the specified budget. Make it punchy and n
     )
   }
 }
+
+export async function GET(request: NextRequest) {
+  const authorized = await checkAuth(request)
+  if (!authorized) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+
+  const ck = process.env.TWITTER_API_KEY!
+  const cs = process.env.TWITTER_API_SECRET!
+  const at = process.env.TWITTER_ACCESS_TOKEN!
+  const ats = process.env.TWITTER_ACCESS_TOKEN_SECRET!
+
+  // For GET, use default behavior (roundup mode with today's date)
+  const today = new Date().toISOString().split('T')[0]
+
+  try {
+    const supabase = await createAdminClient()
+    const dateStart = `${today}T00:00:00.000Z`
+    const dateEnd = `${today}T23:59:59.999Z`
+
+    const { data: posts } = await supabase
+      .from('blog_posts')
+      .select('id, title, sector, summary')
+      .gte('published_date', today)
+      .lte('published_date', today)
+      .order('sector', { ascending: true })
+
+    const { data: newsArticles } = await supabase
+      .from('news_articles')
+      .select('sector, title, summary')
+      .gte('published_at', dateStart)
+      .lte('published_at', dateEnd)
+
+    const sectorCounts: Record<string, number> = {}
+    const topHeadlines: Record<string, string[]> = {}
+
+    for (const article of newsArticles ?? []) {
+      sectorCounts[article.sector] = (sectorCounts[article.sector] ?? 0) + 1
+      if (!topHeadlines[article.sector]) topHeadlines[article.sector] = []
+      if (topHeadlines[article.sector].length < 3) {
+        topHeadlines[article.sector].push(article.title)
+      }
+    }
+
+    const rankedSectors = Object.entries(sectorCounts)
+      .sort(([, a], [, b]) => b - a)
+      .map(([sector, count]) => ({ sector, count }))
+
+    const dateLabel = formatDate(today)
+
+    // roundup mode
+    const activeSectors = rankedSectors.slice(0, 6)
+
+    const { data: sectorStatsRaw } = await supabase
+      .from('sector_stats')
+      .select('sector_name, estimated_jobs_at_risk, trend_direction')
+      .in(
+        'sector_name',
+        activeSectors.map((s) => s.sector),
+      )
+
+    const sectorStats: Record<string, { estimated_jobs_at_risk?: number; trend_direction?: string }> =
+      {}
+    for (const stat of sectorStatsRaw ?? []) {
+      sectorStats[stat.sector_name] = {
+        estimated_jobs_at_risk: stat.estimated_jobs_at_risk,
+        trend_direction: stat.trend_direction,
+      }
+    }
+
+    // Calculate day-of-year for engagement question rotation
+    const dayOfYear = Math.floor(
+      (new Date(today + 'T00:00:00Z').getTime() - new Date(today.slice(0, 4) + '-01-01T00:00:00Z').getTime()) /
+        (1000 * 60 * 60 * 24),
+    )
+    const engagementQ = ENGAGEMENT_QS[dayOfYear % 5]
+
+    const prefix = `⚡ AI Job Clock — ${dateLabel}\n\n`
+    const suffix = `\n\n${engagementQ} 👇\n\n🧵`
+    const hookBudget = 280 - prefix.length - suffix.length
+
+    // Build per-sector budgets and context
+    type SectorInput = {
+      sector: string
+      count: number
+      post?: { id: string; title: string; summary: string }
+      stats?: { estimated_jobs_at_risk?: number; trend_direction?: string }
+      headlines: string[]
+      teaserBudget: number
+    }
+
+    const sectorInputs: SectorInput[] = activeSectors.map(({ sector, count }) => {
+      const post = posts?.find((p) => p.sector === sector)
+      const emoji = SECTOR_EMOJI[sector] ?? '📊'
+      const sectorTag = sector.replace(/\s+/g, '')
+      const headerLine = `${emoji} ${sector} — ${count} stories\n`
+      const statsLine = sectorStats[sector]?.estimated_jobs_at_risk
+        ? `${sectorStats[sector].estimated_jobs_at_risk?.toLocaleString()} jobs at risk\n`
+        : ''
+      const hashtagLine = `\naijobclock.com/blog/${post?.id ?? ''}\n#AI #${sectorTag} #FutureOfWork`
+      const teaserBudget = 280 - headerLine.length - statsLine.length - hashtagLine.length - 5
+
+      return {
+        sector,
+        count,
+        post: post ? { id: post.id, title: post.title, summary: post.summary ?? '' } : undefined,
+        stats: sectorStats[sector],
+        headlines: topHeadlines[sector] ?? [],
+        teaserBudget: Math.max(50, teaserBudget),
+      }
+    })
+
+    // Build the AI prompt
+    const sectorContext = sectorInputs
+      .map((s) => {
+        const headlineList = s.headlines.map((h) => `  - ${h}`).join('\n')
+        return `Sector: ${s.sector} (${s.count} stories today)
+Post title: ${s.post?.title ?? 'N/A'}
+Top headlines:\n${headlineList}
+Teaser budget: ${s.teaserBudget} chars`
+      })
+      .join('\n\n')
+
+    const topPost = posts?.[0]
+    const aiModel = getClient().getGenerativeModel({
+      model: 'gemini-2.5-flash',
+      systemInstruction:
+        "You write tweet content about AI's impact on jobs. Professional but accessible, like a quality newspaper columnist. NEVER use: revolutionizing, transforming, disrupting, paradigm, landscape, unprecedented, game-changing. No hashtags in content. Strictly respect every character limit. Think broadsheet columnist.",
+    })
+
+    let hookText = ''
+    let sectorTeasers: Record<string, string> = {}
+
+    try {
+      const aiPrompt = `Write a tweet thread hook and sector teasers for today's AI job impact briefing.
+
+Hook budget: ${hookBudget} characters (NO hashtags, this is the hook only)
+Date: ${dateLabel}
+
+Sectors to cover:
+${sectorContext}
+
+For each sector teaser, keep it under the specified budget. Make it punchy and newsworthy.`
+
+      const aiResult = await aiModel.generateContent({
+        contents: [{ role: 'user', parts: [{ text: aiPrompt }] }],
+        tools: [ // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          {
+            functionDeclarations: [
+              {
+                name: 'generate_thread_content',
+                description: 'Generate hook and sector teasers for the tweet thread',
+                parameters: {
+                  type: SchemaType.OBJECT as const,
+                  properties: {
+                    hook: {
+                      type: SchemaType.STRING as const,
+                      description: `Hook text under ${hookBudget} chars, no hashtags`,
+                    },
+                    sectors: {
+                      type: SchemaType.ARRAY as const,
+                      description: 'Array of sector teasers',
+                      items: {
+                        type: SchemaType.OBJECT as const,
+                        properties: {
+                          sector: { type: SchemaType.STRING as const },
+                          teaser: { type: SchemaType.STRING as const },
+                        },
+                        required: ['sector', 'teaser'],
+                      },
+                    },
+                  },
+                  required: ['hook', 'sectors'],
+                },
+              },
+            ],
+          },
+        ],
+        toolConfig: {
+          functionCallingConfig: {
+            mode: FunctionCallingMode.ANY,
+            allowedFunctionNames: ['generate_thread_content'],
+          },
+        },
+      })
+
+      const fc = aiResult.response.candidates?.[0]?.content?.parts?.[0]?.functionCall
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const args = fc?.args as any
+      if (args?.hook) {
+        hookText = trimToFit(args.hook, hookBudget)
+      }
+      if (Array.isArray(args?.sectors)) {
+        for (const s of args.sectors) {
+          sectorTeasers[s.sector] = s.teaser
+        }
+      }
+    } catch (aiErr) {
+      console.error('tweet-daily-brief AI generation error:', aiErr)
+    }
+
+    // Fallback hook
+    if (!hookText && topPost) {
+      hookText = trimToFit(topPost.summary ?? topPost.title, hookBudget)
+    }
+    if (!hookText) {
+      hookText = trimToFit(`${activeSectors.length} sectors tracked today`, hookBudget)
+    }
+
+    const hookTweet = `${prefix}${hookText}${suffix}`
+
+    // Build sector tweets
+    const sectorTweets: string[] = sectorInputs.map((s) => {
+      const emoji = SECTOR_EMOJI[s.sector] ?? '📊'
+      const sectorTag = s.sector.replace(/\s+/g, '')
+      const teaser = sectorTeasers[s.sector]
+        ? trimToFit(sectorTeasers[s.sector], s.teaserBudget)
+        : trimToFit(s.post?.summary ?? s.post?.title ?? s.sector, s.teaserBudget)
+      const statsLine = s.stats?.estimated_jobs_at_risk
+        ? `${s.stats.estimated_jobs_at_risk.toLocaleString()} jobs at risk\n`
+        : ''
+      return trimToFit(
+        `${emoji} ${s.sector} — ${s.count} stories\n${statsLine}${teaser}\n\naijobclock.com/blog/${s.post?.id ?? ''}\n#AI #${sectorTag} #FutureOfWork`,
+        280,
+      )
+    })
+
+    const ctaTweet = trimToFit(
+      `⚡ Full briefings for all ${posts?.length ?? 0} sectors with sources:\n\naijobclock.com\n\nWhich insight surprised you most? Reply below 👇\n\nFollow @AIJobclock for daily updates on real AI job impact\n\n#AI #FutureOfWork #AIJobs`,
+      280,
+    )
+
+    const threadTweets = [hookTweet, ...sectorTweets, ctaTweet]
+
+    // For GET, return dry-run (don't actually post)
+    let hookImage: string | undefined
+    if (process.env.GOOGLE_AI_API_KEY && topPost) {
+      const imagePrompt = `Generate a photorealistic, cinematic image for Twitter/X (landscape 16:9) that visually represents this news story: ${topPost.title} — AI's impact on jobs and workers today. Style: dramatic photorealistic scene, editorial photography quality, moody cinematic lighting, shallow depth of field. No text, no overlays, no watermarks. Think Reuters/AP photo quality.`
+      const img = await generateImage(imagePrompt)
+      if (img) hookImage = img
+    }
+    return NextResponse.json({
+      date: today,
+      mode: 'dry-run',
+      sectors: rankedSectors,
+      activeSectors,
+      thread: threadTweets,
+      ...(hookImage ? { hookImage } : {}),
+    })
+  } catch (err) {
+    console.error('tweet-daily-brief error:', err)
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : String(err) },
+      { status: 500 },
+    )
+  }
+}

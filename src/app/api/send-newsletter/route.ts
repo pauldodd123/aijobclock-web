@@ -306,3 +306,178 @@ export async function POST(request: NextRequest) {
     errors: errors.slice(0, 5),
   })
 }
+
+export async function GET(request: NextRequest) {
+  // Auth check: allow cron secret or admin user
+  const cronSecret = process.env.CRON_SECRET
+  const authHeader = request.headers.get('authorization')
+  const isFromCron = cronSecret && authHeader === `Bearer ${cronSecret}`
+  if (!isFromCron) {
+    const { createClient } = await import('@/lib/supabase/server')
+    const supabase = await createClient()
+    const {
+      data: { user },
+    } = await supabase.auth.getUser()
+    if (!user || user.email !== 'paul.dodd@gmail.com') {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
+  }
+
+  const resendApiKey = process.env.RESEND_API_KEY
+  if (!resendApiKey) {
+    console.error('RESEND_API_KEY is not set')
+    return NextResponse.json(
+      { error: 'Email service not configured' },
+      { status: 500 },
+    )
+  }
+
+  // For GET, default to weekly frequency
+  const targetFrequency: string = 'weekly'
+
+  const supabase = await createAdminClient()
+
+  // 1. Fetch active subscribers for this frequency
+  const { data: subscribers, error: subError } = await supabase
+    .from('newsletter_subscribers')
+    .select('email, sectors, frequency, unsubscribe_token')
+    .eq('active', true)
+    .eq('frequency', targetFrequency)
+
+  if (subError) {
+    console.error('send-newsletter subscribers error:', subError)
+    return NextResponse.json(
+      { error: 'Failed to fetch subscribers' },
+      { status: 500 },
+    )
+  }
+
+  if (!subscribers || subscribers.length === 0) {
+    return NextResponse.json({
+      message: 'No active subscribers for this frequency',
+      sent: 0,
+    })
+  }
+
+  // 2. Fetch recent content
+  const daysBack = targetFrequency === 'daily' ? 1 : 7
+  const since = new Date(
+    Date.now() - daysBack * 24 * 60 * 60 * 1000,
+  ).toISOString()
+
+  const [articlesResult, postsResult, statsResult] = await Promise.all([
+    supabase
+      .from('news_articles')
+      .select('id, title, url, summary, sector, source_name, scraped_at')
+      .gte('scraped_at', since)
+      .order('scraped_at', { ascending: false })
+      .limit(20),
+    supabase
+      .from('blog_posts')
+      .select('id, title, slug, sector, summary, created_at')
+      .gte('created_at', since)
+      .order('created_at', { ascending: false })
+      .limit(5),
+    supabase
+      .from('sector_stats')
+      .select('sector_name, estimated_jobs_at_risk, trend_direction, article_count')
+      .order('estimated_jobs_at_risk', { ascending: false }),
+  ])
+
+  const allArticles = (articlesResult.data as any[]) ?? []
+  const allPosts = (postsResult.data as any[]) ?? []
+  const sectorStats = (statsResult.data as any[]) ?? []
+
+  // 3. Send to each subscriber
+  let sent = 0
+  const errors: string[] = []
+  const date = new Date().toLocaleDateString('en-US', {
+    month: 'long',
+    day: 'numeric',
+    year: 'numeric',
+  })
+
+  for (const sub of subscribers) {
+    const subSectors: string[] = sub.sectors ?? []
+    const wantsAll =
+      subSectors.length === 0 || subSectors.includes('All')
+
+    // Filter content by subscriber's sectors
+    const filteredArticles = wantsAll
+      ? allArticles
+      : allArticles.filter(
+          (a) => a.sector && subSectors.includes(a.sector),
+        )
+    const filteredPosts = wantsAll
+      ? allPosts
+      : allPosts.filter(
+          (p) => p.sector && subSectors.includes(p.sector),
+        )
+
+    // Skip if no relevant content
+    if (filteredArticles.length === 0 && filteredPosts.length === 0) {
+      continue
+    }
+
+    const unsubscribeUrl = `${SITE_URL}/api/unsubscribe?token=${sub.unsubscribe_token}`
+
+    const html = buildEmailHtml({
+      articles: filteredArticles,
+      posts: filteredPosts,
+      sectorStats,
+      frequency: targetFrequency,
+      sectors: subSectors,
+      unsubscribeUrl,
+      siteUrl: SITE_URL,
+    })
+
+    const subject = `${targetFrequency === 'daily' ? 'Daily' : 'Weekly'} AI Job Clock Update — ${date}`
+
+    try {
+      const res = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${resendApiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          from: 'AI Job Clock <fred@update.aijobclock.com>',
+          to: [sub.email],
+          subject,
+          html,
+        }),
+      })
+
+      if (res.ok) {
+        const resData = await res.json()
+        await supabase.from('email_logs').insert({
+          subscriber_email: sub.email,
+          resend_id: resData.id ?? null,
+          status: 'sent',
+        })
+        sent++
+      } else {
+        const errText = await res.text()
+        console.error(`Resend error for ${sub.email}:`, res.status, errText)
+        await supabase.from('email_logs').insert({
+          subscriber_email: sub.email,
+          status: 'send_failed',
+        })
+        errors.push(`${sub.email}: ${res.status} ${errText}`)
+      }
+    } catch (err: any) {
+      console.error(`Failed to send to ${sub.email}:`, err)
+      await supabase.from('email_logs').insert({
+        subscriber_email: sub.email,
+        status: 'send_failed',
+      })
+      errors.push(`${sub.email}: ${err.message ?? 'Unknown error'}`)
+    }
+  }
+
+  return NextResponse.json({
+    sent,
+    total: subscribers.length,
+    errors: errors.slice(0, 5),
+  })
+}

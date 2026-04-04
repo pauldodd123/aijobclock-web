@@ -675,3 +675,462 @@ Tweet 3: Impact — what this means for workers (under 275 chars)`
     )
   }
 }
+
+export async function GET(request: NextRequest) {
+  const authorized = await checkAuth(request)
+  if (!authorized) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+
+  const ck = process.env.TWITTER_API_KEY!
+  const cs = process.env.TWITTER_API_SECRET!
+  const at = process.env.TWITTER_ACCESS_TOKEN!
+  const ats = process.env.TWITTER_ACCESS_TOKEN_SECRET!
+
+  const supabase = await createAdminClient()
+  const today = new Date().toISOString().split('T')[0]
+
+  try {
+    // Run detection (no force mode, no custom story) — just run the normal flow
+    // -----------------------------------------------------------------------
+    // Check 48-hour cooldown
+    // -----------------------------------------------------------------------
+    const cutoff48h = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString()
+    const { data: recentBreaking } = await supabase
+      .from('breaking_news')
+      .select('id, created_at')
+      .eq('active', true)
+      .gte('created_at', cutoff48h)
+      .limit(1)
+
+    if (recentBreaking && recentBreaking.length > 0) {
+      return NextResponse.json({
+        skipped: true,
+        reason: 'cooldown',
+        lastBreaking: recentBreaking[0].created_at,
+      })
+    }
+
+    // -----------------------------------------------------------------------
+    // Search Firecrawl
+    // -----------------------------------------------------------------------
+    const firecrawlKey = process.env.FIRECRAWL_API_KEY
+    if (!firecrawlKey) {
+      return NextResponse.json({ error: 'FIRECRAWL_API_KEY not configured' }, { status: 500 })
+    }
+
+    type Candidate = {
+      headline: string
+      summary: string
+      sector: string
+      source_url?: string
+      url?: string
+    }
+
+    const candidates: Candidate[] = []
+    const seenUrls = new Set<string>()
+    for (const query of FIRECRAWL_QUERIES) {
+      try {
+        const fcRes = await fetch('https://api.firecrawl.dev/v1/search', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${firecrawlKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ query, limit: 5, tbs: 'qdr:d' }),
+        })
+        if (!fcRes.ok) {
+          console.error('Firecrawl search failed:', fcRes.status, await fcRes.text())
+          continue
+        }
+        const fcData = await fcRes.json()
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const results: any[] = fcData.data ?? fcData.results ?? []
+        for (const result of results) {
+          const url: string = result.url ?? result.link ?? ''
+          if (url && seenUrls.has(url)) continue
+          if (url) seenUrls.add(url)
+          candidates.push({
+            headline: result.title ?? result.headline ?? '',
+            summary: result.description ?? result.snippet ?? result.summary ?? '',
+            sector: 'Technology', // will be determined by AI
+            source_url: url,
+            url,
+          })
+        }
+      } catch (fcErr) {
+        console.error('Firecrawl query error:', fcErr)
+      }
+    }
+
+    if (candidates.length === 0) {
+      return NextResponse.json({ skipped: true, reason: 'no_results' })
+    }
+
+    // -----------------------------------------------------------------------
+    // AI scoring
+    // -----------------------------------------------------------------------
+    const candidateContext = candidates
+      .map(
+        (c, i) =>
+          `[${i}] ${c.headline}\n${c.summary}\n${c.source_url ?? ''}`,
+      )
+      .join('\n\n')
+
+    const scoringModel = getClient().getGenerativeModel({
+      model: 'gemini-2.5-flash',
+      systemInstruction:
+        'Breaking news editor for AI Job Clock. At most 1 story/week qualifies. Most runs: no breaking. Score 8-10 only for: major AI product launches threatening job categories, mass layoffs 1000+ citing AI, landmark AI regulation signed, Fortune 500 announcing AI workforce replacement, major AI safety incident. NOT: routine updates, small layoffs, opinion pieces, incremental progress.',
+    })
+
+    const scoringResult = await scoringModel.generateContent({
+      contents: [
+        {
+          role: 'user',
+          parts: [
+            {
+              text: `Evaluate these ${candidates.length} news candidates. Pick the most breaking story about AI's impact on jobs, if any qualifies.\n\nCandidates:\n${candidateContext}`,
+            },
+          ],
+        },
+      ],
+      tools: [ // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        {
+          functionDeclarations: [
+            {
+              name: 'evaluate_breaking_news',
+              description: 'Evaluate whether any candidate story qualifies as breaking news',
+              parameters: {
+                type: SchemaType.OBJECT as const,
+                properties: {
+                  is_breaking: {
+                    type: SchemaType.BOOLEAN as const,
+                    description: 'Whether any story qualifies as breaking news',
+                  },
+                  score: {
+                    type: SchemaType.NUMBER as const,
+                    description: 'Breaking news score 1-10',
+                  },
+                  story_index: {
+                    type: SchemaType.NUMBER as const,
+                    description: 'Index of the selected story in the candidates array',
+                  },
+                  headline: {
+                    type: SchemaType.STRING as const,
+                    description: 'Refined headline for the breaking story',
+                  },
+                  summary: {
+                    type: SchemaType.STRING as const,
+                    description: 'Brief summary of the breaking story',
+                  },
+                  sector: {
+                    type: SchemaType.STRING as const,
+                    format: 'enum',
+                    description: 'Sector affected',
+                    enum: [
+                      'Technology',
+                      'Finance',
+                      'Healthcare',
+                      'Manufacturing',
+                      'Retail',
+                      'Media',
+                      'Legal',
+                      'Education',
+                      'Transportation',
+                    ],
+                  },
+                  reasoning: {
+                    type: SchemaType.STRING as const,
+                    description: 'Reasoning for the score and decision',
+                  },
+                },
+                required: [
+                  'is_breaking',
+                  'score',
+                  'story_index',
+                  'headline',
+                  'summary',
+                  'sector',
+                  'reasoning',
+                ],
+              },
+            },
+          ],
+        },
+      ],
+      toolConfig: {
+        functionCallingConfig: {
+          mode: FunctionCallingMode.ANY,
+          allowedFunctionNames: ['evaluate_breaking_news'],
+        },
+      },
+    })
+
+    const scoringFc =
+      scoringResult.response.candidates?.[0]?.content?.parts?.[0]?.functionCall
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const scoringArgs = scoringFc?.args as any
+
+    if (!scoringArgs) {
+      return NextResponse.json({ skipped: true, reason: 'ai_scoring_failed' })
+    }
+
+    const evaluation = scoringArgs
+
+    if (!evaluation.is_breaking || evaluation.score < 8) {
+      return NextResponse.json({
+        skipped: true,
+        reason: 'not_breaking',
+        score: evaluation.score,
+        reasoning: evaluation.reasoning,
+      })
+    }
+
+    // -----------------------------------------------------------------------
+    // We have a breaking story — proceed with publishing
+    // -----------------------------------------------------------------------
+    const selectedCandidate = candidates[evaluation.story_index] ?? candidates[0]
+    const finalHeadline = evaluation.headline || selectedCandidate.headline
+    const finalSummary = evaluation.summary || selectedCandidate.summary
+    const finalSector = evaluation.sector || selectedCandidate.sector
+
+    // -----------------------------------------------------------------------
+    // Generate blog post
+    // -----------------------------------------------------------------------
+    const articleModel = getClient().getGenerativeModel({
+      model: 'gemini-2.5-flash',
+      systemInstruction:
+        'Senior analyst at AI Job Clock. Breaking news analysis. Open with what happened, worker impact, comparison with existing models, concrete estimates, forward-looking perspective.',
+    })
+
+    const articlePrompt = `Write an 800-1200 word markdown blog post analyzing this breaking AI news story for workers and jobs.
+
+Headline: ${finalHeadline}
+Summary: ${finalSummary}
+Sector: ${finalSector}
+${selectedCandidate.source_url ? `Source: ${selectedCandidate.source_url}` : ''}
+
+Structure: What happened → Worker impact → Comparison with existing automation → Concrete job estimates → What to watch for.`
+
+    const articleResult = await articleModel.generateContent({
+      contents: [{ role: 'user', parts: [{ text: articlePrompt }] }],
+      tools: [ // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        {
+          functionDeclarations: [
+            {
+              name: 'publish_breaking_article',
+              description: 'Publish the breaking news article content',
+              parameters: {
+                type: SchemaType.OBJECT as const,
+                properties: {
+                  content: {
+                    type: SchemaType.STRING as const,
+                    description: 'Full markdown content 800-1200 words',
+                  },
+                },
+                required: ['content'],
+              },
+            },
+          ],
+        },
+      ],
+      toolConfig: {
+        functionCallingConfig: {
+          mode: FunctionCallingMode.ANY,
+          allowedFunctionNames: ['publish_breaking_article'],
+        },
+      },
+    })
+
+    const articleFc =
+      articleResult.response.candidates?.[0]?.content?.parts?.[0]?.functionCall
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const articleArgs = articleFc?.args as any
+    const articleContent: string = articleArgs?.content ?? ''
+
+    // -----------------------------------------------------------------------
+    // Upsert blog post
+    // -----------------------------------------------------------------------
+    const blogTitle = `BREAKING: ${finalHeadline}`
+    const slugBase = finalHeadline
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 60)
+    const blogSlug = `breaking-${slugBase}-${today}`
+
+    const { data: blogPostData, error: upsertErr } = await supabase
+      .from('blog_posts')
+      .upsert(
+        {
+          title: blogTitle,
+          slug: blogSlug,
+          sector: 'Breaking',
+          summary: finalSummary,
+          content: articleContent,
+          published_date: today,
+        },
+        { onConflict: 'sector,published_date' },
+      )
+      .select('id')
+      .single()
+
+    if (upsertErr) {
+      console.error('detect-breaking-news blog post upsert error:', upsertErr)
+      return NextResponse.json(
+        { error: `Blog post upsert failed: ${upsertErr.message}` },
+        { status: 500 },
+      )
+    }
+
+    const blogPostId = blogPostData?.id
+
+    // -----------------------------------------------------------------------
+    // Deactivate existing breaking_news and insert new record
+    // -----------------------------------------------------------------------
+    await supabase.from('breaking_news').update({ active: false }).eq('active', true)
+
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
+    await supabase.from('breaking_news').insert({
+      headline: finalHeadline,
+      summary: finalSummary,
+      blog_post_id: blogPostId,
+      active: true,
+      expires_at: expiresAt,
+    })
+
+    // -----------------------------------------------------------------------
+    // Generate tweet thread
+    // -----------------------------------------------------------------------
+    const tweetModel = getClient().getGenerativeModel({
+      model: 'gemini-2.5-flash',
+      systemInstruction:
+        'Breaking news tweets about AI and jobs. Like quality newspaper columnist. No: revolutionizing, transforming, disrupting, paradigm, landscape, unprecedented, game-changing. No hashtags. No links. No ellipsis.',
+    })
+
+    const tweetPrompt = `Write a 3-tweet breaking news thread about this story.
+
+Headline: ${finalHeadline}
+Summary: ${finalSummary}
+Sector: ${finalSector}
+
+Tweet 1: Hook — grab attention with the core news (under 270 chars)
+Tweet 2: Details — key facts and context (under 270 chars)
+Tweet 3: Impact — what this means for workers (under 275 chars)`
+
+    const tweetResult = await tweetModel.generateContent({
+      contents: [{ role: 'user', parts: [{ text: tweetPrompt }] }],
+      tools: [ // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        {
+          functionDeclarations: [
+            {
+              name: 'generate_breaking_thread',
+              description: 'Generate a 3-tweet breaking news thread',
+              parameters: {
+                type: SchemaType.OBJECT as const,
+                properties: {
+                  tweet1: {
+                    type: SchemaType.STRING as const,
+                    description: 'Hook tweet, under 270 chars',
+                  },
+                  tweet2: {
+                    type: SchemaType.STRING as const,
+                    description: 'Details tweet, under 270 chars',
+                  },
+                  tweet3: {
+                    type: SchemaType.STRING as const,
+                    description: 'Impact tweet, under 275 chars',
+                  },
+                },
+                required: ['tweet1', 'tweet2', 'tweet3'],
+              },
+            },
+          ],
+        },
+      ],
+      toolConfig: {
+        functionCallingConfig: {
+          mode: FunctionCallingMode.ANY,
+          allowedFunctionNames: ['generate_breaking_thread'],
+        },
+      },
+    })
+
+    const tweetFc = tweetResult.response.candidates?.[0]?.content?.parts?.[0]?.functionCall
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const tweetArgs = tweetFc?.args as any
+
+    const tweet1 = trimToFit(tweetArgs?.tweet1 ?? finalHeadline, 270)
+    const tweet2 = trimToFit(tweetArgs?.tweet2 ?? finalSummary, 270)
+    const tweet3 = trimToFit(tweetArgs?.tweet3 ?? `This affects workers in the ${finalSector} sector.`, 275)
+
+    const emoji = SECTOR_EMOJI[finalSector] ?? '🚨'
+    const tweet4 = trimToFit(
+      `${emoji} Full analysis with sources:\n\naijobclock.com/blog/${blogSlug}\n\nFollow @AIJobclock for real-time AI job impact updates\n\n#AI #FutureOfWork #AIJobClock`,
+      280,
+    )
+
+    const threadTweets = [tweet1, tweet2, tweet3, tweet4]
+
+    // -----------------------------------------------------------------------
+    // Generate and upload hero image
+    // -----------------------------------------------------------------------
+    const imagePrompt = `Photorealistic cinematic landscape 16:9 representing breaking news: ${finalHeadline}. Editorial photography quality, Reuters/AP style, moody dramatic lighting, shallow depth of field. No text, no overlays, no watermarks.`
+
+    const imageDataUrl = await generateImage(imagePrompt)
+    if (!imageDataUrl) {
+      console.error('detect-breaking-news: image generation failed')
+      return NextResponse.json(
+        { error: 'Image generation failed' },
+        { status: 502 },
+      )
+    }
+
+    const mediaId = await uploadMediaToTwitter(imageDataUrl, ck, cs, at, ats)
+    if (!mediaId) {
+      console.error('detect-breaking-news: media upload failed')
+      return NextResponse.json(
+        { error: 'Twitter media upload failed' },
+        { status: 502 },
+      )
+    }
+
+    // -----------------------------------------------------------------------
+    // Post thread
+    // -----------------------------------------------------------------------
+    const tweetResults: Array<{ tweet: string; id?: string; success: boolean; error?: string }> = []
+
+    // Tweet 1 with image
+    const result1 = await postTweet(tweet1, ck, cs, at, ats, undefined, [mediaId])
+    tweetResults.push({ tweet: tweet1, ...result1 })
+
+    let lastId = result1.id
+
+    if (result1.success) {
+      for (const tweetText of [tweet2, tweet3, tweet4]) {
+        await delay(1500)
+        const res = await postTweet(tweetText, ck, cs, at, ats, lastId)
+        tweetResults.push({ tweet: tweetText, ...res })
+        if (!res.success) break
+        lastId = res.id
+      }
+    }
+
+    return NextResponse.json({
+      breaking: true,
+      tweeted: true,
+      score: evaluation.score,
+      headline: finalHeadline,
+      sector: finalSector,
+      blogPostId,
+      blogPostSlug: blogSlug,
+      thread: tweetResults,
+    })
+  } catch (err) {
+    console.error('detect-breaking-news error:', err)
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : String(err) },
+      { status: 500 },
+    )
+  }
+}
