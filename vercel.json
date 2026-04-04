@@ -1,9 +1,14 @@
 {
   "crons": [
-    {
-      "path": "/api/generate-daily-briefing",
-      "schedule": "0 6 * * *"
-    },
+    { "path": "/api/generate-daily-briefing?sector=Tech", "schedule": "0 6 * * *" },
+    { "path": "/api/generate-daily-briefing?sector=Finance", "schedule": "2 6 * * *" },
+    { "path": "/api/generate-daily-briefing?sector=Healthcare", "schedule": "4 6 * * *" },
+    { "path": "/api/generate-daily-briefing?sector=Manufacturing", "schedule": "6 6 * * *" },
+    { "path": "/api/generate-daily-briefing?sector=Retail", "schedule": "8 6 * * *" },
+    { "path": "/api/generate-daily-briefing?sector=Media", "schedule": "10 6 * * *" },
+    { "path": "/api/generate-daily-briefing?sector=Legal", "schedule": "12 6 * * *" },
+    { "path": "/api/generate-daily-briefing?sector=Education", "schedule": "14 6 * * *" },
+    { "path": "/api/generate-daily-briefing?sector=Transportation", "schedule": "16 6 * * *" },
     {
       "path": "/api/tweet-daily-brief",
       "schedule": "0 7 * * *"
