@@ -333,16 +333,16 @@ export async function POST(request: NextRequest) {
 
     const { data: sectorStatsRaw } = await supabase
       .from('sector_stats')
-      .select('sector, estimated_jobs_at_risk, trend_direction')
+      .select('sector_name, estimated_jobs_at_risk, trend_direction')
       .in(
-        'sector',
+        'sector_name',
         activeSectors.map((s) => s.sector),
       )
 
     const sectorStats: Record<string, { estimated_jobs_at_risk?: number; trend_direction?: string }> =
       {}
     for (const stat of sectorStatsRaw ?? []) {
-      sectorStats[stat.sector] = {
+      sectorStats[stat.sector_name] = {
         estimated_jobs_at_risk: stat.estimated_jobs_at_risk,
         trend_direction: stat.trend_direction,
       }
