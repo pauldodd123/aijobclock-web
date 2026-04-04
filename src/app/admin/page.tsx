@@ -5,10 +5,9 @@ import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip,
-  LineChart, Line
 } from 'recharts'
 import {
-  Users, Eye, UserPlus, LogOut, Send, Loader2,
+  Users, UserPlus, LogOut, Send, Loader2,
   ChevronDown, ChevronUp, Mail
 } from 'lucide-react'
 
@@ -26,10 +25,6 @@ interface AdminStats {
   activeSubscribers: number
   subscribers: Subscriber[]
   subsByDate: Record<string, number>
-  viewsByDate: Record<string, number>
-  uniqueVisitorsByDate: Record<string, number>
-  todayViews: number
-  todayUnique: number
   todaySubs: number
 }
 
@@ -200,12 +195,6 @@ export default function AdminPage() {
     count: stats?.subsByDate[date] || 0,
   }))
 
-  const viewsChartData = last30.map(date => ({
-    date: date.slice(5),
-    count: stats?.viewsByDate[date] || 0,
-    unique: stats?.uniqueVisitorsByDate[date] || 0,
-  }))
-
   const statusColor: Record<string, string> = {
     delivered: 'bg-green-500/10 text-green-600',
     bounced: 'bg-destructive/10 text-destructive',
@@ -245,13 +234,6 @@ export default function AdminPage() {
               <span className="text-xs font-medium">Active Subscribers</span>
             </div>
             <p className="text-2xl font-bold text-foreground">{stats.activeSubscribers}</p>
-          </div>
-          <div className="rounded-xl border border-border bg-card p-6">
-            <div className="flex items-center gap-2 text-muted-foreground mb-2">
-              <Eye className="size-4" />
-              <span className="text-xs font-medium">Views Today</span>
-            </div>
-            <p className="text-2xl font-bold text-foreground">{stats.todayViews}</p>
           </div>
           <div className="rounded-xl border border-border bg-card p-6">
             <div className="flex items-center gap-2 text-muted-foreground mb-2">
@@ -337,24 +319,6 @@ export default function AdminPage() {
                 <Tooltip />
                 <Bar dataKey="count" fill="var(--chart-1, #3b82f6)" radius={2} />
               </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-      )}
-
-      {/* Page views chart */}
-      {stats && (
-        <div className="rounded-xl border border-border bg-card p-6 space-y-3">
-          <h2 className="text-sm font-semibold text-foreground">Page Views (last 30 days)</h2>
-          <div className="h-[200px] w-full">
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={viewsChartData}>
-                <XAxis dataKey="date" tick={{ fontSize: 10 }} />
-                <YAxis allowDecimals={false} tick={{ fontSize: 10 }} />
-                <Tooltip />
-                <Line type="monotone" dataKey="count" stroke="var(--chart-1, #3b82f6)" dot={false} strokeWidth={2} name="Views" />
-                <Line type="monotone" dataKey="unique" stroke="var(--chart-2, #10b981)" dot={false} strokeWidth={2} name="Unique" />
-              </LineChart>
             </ResponsiveContainer>
           </div>
         </div>

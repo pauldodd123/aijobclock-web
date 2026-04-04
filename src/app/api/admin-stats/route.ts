@@ -98,35 +98,8 @@ export async function GET() {
     if (date) subsByDate[date] = (subsByDate[date] ?? 0) + 1
   }
 
-  // 8. Page views from last 30 days grouped by date
-  const { data: recentViews } = await adminSupabase
-    .from('page_views')
-    .select('viewed_at, visitor_id')
-    .gte('viewed_at', thirtyDaysAgo.toISOString())
-
-  const viewsByDate: Record<string, number> = {}
-  const uniqueVisitorsByDate: Record<string, Set<string>> = {}
-
-  for (const view of recentViews ?? []) {
-    const date = view.viewed_at?.slice(0, 10)
-    if (!date) continue
-    viewsByDate[date] = (viewsByDate[date] ?? 0) + 1
-    if (view.visitor_id) {
-      if (!uniqueVisitorsByDate[date]) uniqueVisitorsByDate[date] = new Set()
-      uniqueVisitorsByDate[date].add(view.visitor_id)
-    }
-  }
-
-  // Convert Sets to counts
-  const uniqueVisitorsByDateCounts: Record<string, number> = {}
-  for (const [date, set] of Object.entries(uniqueVisitorsByDate)) {
-    uniqueVisitorsByDateCounts[date] = set.size
-  }
-
-  // 9. Today's stats
+  // 8. Today's stats
   const today = new Date().toISOString().slice(0, 10)
-  const todayViews = viewsByDate[today] ?? 0
-  const todayUnique = uniqueVisitorsByDateCounts[today] ?? 0
   const todaySubs = subsByDate[today] ?? 0
 
   return NextResponse.json({
@@ -134,10 +107,6 @@ export async function GET() {
     activeSubscribers,
     subscribers: enrichedSubscribers,
     subsByDate,
-    viewsByDate,
-    uniqueVisitorsByDate: uniqueVisitorsByDateCounts,
-    todayViews,
-    todayUnique,
     todaySubs,
   })
 }
