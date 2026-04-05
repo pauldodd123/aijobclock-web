@@ -11,7 +11,7 @@
     { "path": "/api/generate-daily-briefing?sector=Transportation", "schedule": "16 6 * * *" },
     {
       "path": "/api/tweet-daily-brief",
-      "schedule": "0 7 * * *"
+      "schedule": "0 9 * * *"
     },
     {
       "path": "/api/detect-breaking-news",
