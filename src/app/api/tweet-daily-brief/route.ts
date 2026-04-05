@@ -844,22 +844,70 @@ For each sector teaser, keep it under the specified budget. Make it punchy and n
       280,
     )
 
-    const threadTweets = [hookTweet, ...sectorTweets, ctaTweet]
-
-    // For GET, return dry-run (don't actually post)
-    let hookImage: string | undefined
+    // Live posting (Vercel cron hits GET)
+    let heroMediaId: string | undefined
     if (process.env.GOOGLE_AI_API_KEY && topPost) {
-      const imagePrompt = `Generate a photorealistic, cinematic image for Twitter/X (landscape 16:9) that visually represents this news story: ${topPost.title} — AI's impact on jobs and workers today. Style: dramatic photorealistic scene, editorial photography quality, moody cinematic lighting, shallow depth of field. No text, no overlays, no watermarks. Think Reuters/AP photo quality.`
-      const img = await generateImage(imagePrompt)
-      if (img) hookImage = img
+      try {
+        const imagePrompt = `Generate a photorealistic, cinematic image for Twitter/X (landscape 16:9) that visually represents this news story: ${topPost.title} — AI's impact on jobs and workers today. Style: dramatic photorealistic scene, editorial photography quality, moody cinematic lighting, shallow depth of field. No text, no overlays, no watermarks. Think Reuters/AP photo quality.`
+        const imageDataUrl = await generateImage(imagePrompt)
+        if (imageDataUrl) {
+          const mediaId = await uploadMediaToTwitter(imageDataUrl, ck, cs, at, ats)
+          if (mediaId) heroMediaId = mediaId
+        }
+      } catch (imgErr) {
+        console.error('tweet-daily-brief image generation error:', imgErr)
+      }
     }
+
+    const tweetResults: Array<{ tweet: string; id?: string; success: boolean; error?: string }> = []
+
+    const hookResult = await postTweet(
+      hookTweet,
+      ck,
+      cs,
+      at,
+      ats,
+      undefined,
+      heroMediaId ? [heroMediaId] : undefined,
+    )
+    tweetResults.push({ tweet: hookTweet, ...hookResult })
+
+    if (!hookResult.success) {
+      return NextResponse.json({ date: today, mode: 'roundup', failed: true, results: tweetResults })
+    }
+
+    let lastTweetId = hookResult.id
+
+    for (let i = 0; i < sectorTweets.length; i++) {
+      await delay(1500)
+      const sectorResult = await postTweet(sectorTweets[i], ck, cs, at, ats, lastTweetId)
+      tweetResults.push({ tweet: sectorTweets[i], ...sectorResult })
+      if (!sectorResult.success) {
+        const remainingTweets = [...sectorTweets.slice(i + 1), ctaTweet]
+        for (let j = 0; j < remainingTweets.length; j++) {
+          await supabase.from('failed_tweets').insert({
+            mode: `roundup-t${i + j + 3}`,
+            tweet_text: remainingTweets[j],
+            error_message: sectorResult.error,
+          })
+        }
+        break
+      }
+      lastTweetId = sectorResult.id
+    }
+
+    const allSectorSucceeded = tweetResults.slice(1).every((r) => r.success)
+    if (allSectorSucceeded) {
+      await delay(1500)
+      const ctaResult = await postTweet(ctaTweet, ck, cs, at, ats, lastTweetId)
+      tweetResults.push({ tweet: ctaTweet, ...ctaResult })
+    }
+
     return NextResponse.json({
       date: today,
-      mode: 'dry-run',
-      sectors: rankedSectors,
-      activeSectors,
-      thread: threadTweets,
-      ...(hookImage ? { hookImage } : {}),
+      mode: 'roundup',
+      tweeted: tweetResults.length,
+      results: tweetResults,
     })
   } catch (err) {
     console.error('tweet-daily-brief error:', err)
