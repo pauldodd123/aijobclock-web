@@ -60,12 +60,14 @@ async function postTweet(
   ats: string,
   replyToId?: string,
   mediaIds?: string[],
+  poll?: { options: string[]; duration_minutes: number },
 ): Promise<{ id: string; success: boolean; error?: string }> {
   const tweetUrl = 'https://api.x.com/2/tweets'
   const auth = await buildOAuthHeader('POST', tweetUrl, ck, cs, at, ats)
   const body: Record<string, unknown> = { text }
   if (replyToId) body.reply = { in_reply_to_tweet_id: replyToId }
   if (mediaIds?.length) body.media = { media_ids: mediaIds }
+  if (poll && poll.options.length >= 2) body.poll = { options: poll.options.slice(0, 4), duration_minutes: poll.duration_minutes }
   const res = await fetch(tweetUrl, {
     method: 'POST',
     headers: { Authorization: auth, 'Content-Type': 'application/json' },
@@ -302,20 +304,55 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ skipped: true, reason: 'no_results' })
       }
 
+      const cappedCandidates = candidates.slice(0, 10)
+
+      // -----------------------------------------------------------------------
+      // Fetch recent article titles for deduplication
+      // -----------------------------------------------------------------------
+      const { data: recentArticles } = await supabase
+        .from('news_articles')
+        .select('title')
+        .order('scraped_at', { ascending: false })
+        .limit(50)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const recentTitles = (recentArticles ?? []).map((a: any) => a.title as string)
+
       // -----------------------------------------------------------------------
       // AI scoring
       // -----------------------------------------------------------------------
-      const candidateContext = candidates
-        .map(
-          (c, i) =>
-            `[${i}] ${c.headline}\n${c.summary}\n${c.source_url ?? ''}`,
-        )
-        .join('\n\n')
+      const candidatesList = cappedCandidates
+        .map((c, i) => `${i + 1}. "${c.headline}" — ${c.summary}`)
+        .join('\n')
+
+      const scoringSystemPrompt = `You are a breaking news editor for AI Job Clock (aijobclock.com), an AI employment displacement tracker.
+
+Review these news stories from the last 24 hours and determine if ANY represent genuine BREAKING NEWS worthy of an urgent alert.
+
+BREAKING NEWS criteria (score 8-10):
+- Major AI product launch that directly threatens entire job categories (e.g., GPT-5, Gemini 3, a new autonomous AI agent platform)
+- Mass layoff of 1,000+ people explicitly citing AI as the reason
+- Landmark AI regulation signed into law by a major government
+- Fortune 500 company announcing complete AI workforce replacement in a division
+- Major AI safety incident with employment implications
+
+NOT breaking (score 1-4):
+- Routine AI product updates or minor features
+- Small layoffs or normal business restructuring
+- Opinion pieces, research papers, or speculation
+- Incremental AI progress or benchmark improvements
+- Job market reports or surveys
+
+IMPORTANT: Be extremely selective. At most 1 story per week should qualify as breaking. Most runs should return no breaking news.
+
+Recent headlines already covered (avoid duplicates):
+${recentTitles.slice(0, 20).join('\n')}
+
+Candidate stories:
+${candidatesList}`
 
       const scoringModel = getClient().getGenerativeModel({
         model: 'gemini-2.5-flash',
-        systemInstruction:
-          'Breaking news editor for AI Job Clock. At most 1 story/week qualifies. Most runs: no breaking. Score 8-10 only for: major AI product launches threatening job categories, mass layoffs 1000+ citing AI, landmark AI regulation signed, Fortune 500 announcing AI workforce replacement, major AI safety incident. NOT: routine updates, small layoffs, opinion pieces, incremental progress.',
+        systemInstruction: scoringSystemPrompt,
       })
 
       const scoringResult = await scoringModel.generateContent({
@@ -324,7 +361,7 @@ export async function POST(request: NextRequest) {
             role: 'user',
             parts: [
               {
-                text: `Evaluate these ${candidates.length} news candidates. Pick the most breaking story about AI's impact on jobs, if any qualifies.\n\nCandidates:\n${candidateContext}`,
+                text: 'Evaluate these stories. Use the evaluate_breaking_news tool to return your assessment.',
               },
             ],
           },
@@ -363,7 +400,7 @@ export async function POST(request: NextRequest) {
                       format: 'enum',
                       description: 'Sector affected',
                       enum: [
-                        'Technology',
+                        'Tech',
                         'Finance',
                         'Healthcare',
                         'Manufacturing',
@@ -438,23 +475,38 @@ export async function POST(request: NextRequest) {
     // -----------------------------------------------------------------------
     // Generate blog post
     // -----------------------------------------------------------------------
-    const articleModel = getClient().getGenerativeModel({
-      model: 'gemini-2.5-flash',
-      systemInstruction:
-        'Senior analyst at AI Job Clock. Breaking news analysis. Open with what happened, worker impact, comparison with existing models, concrete estimates, forward-looking perspective.',
-    })
+    const customContext = ''
 
-    const articlePrompt = `Write an 800-1200 word markdown blog post analyzing this breaking AI news story for workers and jobs.
+    const articleSystemPrompt = `You are a senior analyst at AI Job Clock (aijobclock.com), writing a BREAKING NEWS analysis.
+
+Write a detailed breaking news article (800-1200 words) in markdown format about this story:
 
 Headline: ${finalHeadline}
 Summary: ${finalSummary}
+Source: ${selectedCandidate?.source_url || 'Multiple sources'}
+URL: ${selectedCandidate?.url || 'N/A'}
 Sector: ${finalSector}
-${selectedCandidate.source_url ? `Source: ${selectedCandidate.source_url}` : ''}
+${customContext}
 
-Structure: What happened → Worker impact → Comparison with existing automation → Concrete job estimates → What to watch for.`
+The article should:
+1. Open with the breaking news — what happened, when, and why it matters
+2. Explain the technology or product in detail and how it works in practice
+3. Analyze immediate and medium-term employment impact in the ${finalSector} sector
+4. Discuss competitive landscape and what differentiates this development
+5. Include concrete estimates, scenarios, and constraints (cost, reliability, regulation, adoption)
+6. End with a clear forward-looking perspective for workers and employers
+7. Use markdown headings (##, ###), bold, and bullet points for readability
+
+Write in a sharp, editorial tone — urgent but analytical. This is breaking news, not a press release.
+Do NOT include a title heading — the title will be displayed separately.`
+
+    const articleModel = getClient().getGenerativeModel({
+      model: 'gemini-2.5-flash',
+      systemInstruction: articleSystemPrompt,
+    })
 
     const articleResult = await articleModel.generateContent({
-      contents: [{ role: 'user', parts: [{ text: articlePrompt }] }],
+      contents: [{ role: 'user', parts: [{ text: 'Write the breaking news article now. Use the publish_breaking_article tool.' }] }],
       tools: [ // eslint-disable-next-line @typescript-eslint/no-explicit-any
         {
           functionDeclarations: [
@@ -546,18 +598,10 @@ Structure: What happened → Worker impact → Comparison with existing automati
     const tweetModel = getClient().getGenerativeModel({
       model: 'gemini-2.5-flash',
       systemInstruction:
-        'Breaking news tweets about AI and jobs. Like quality newspaper columnist. No: revolutionizing, transforming, disrupting, paradigm, landscape, unprecedented, game-changing. No hashtags. No links. No ellipsis.',
+        'You write breaking news tweets about AI and jobs. Write in clear, confident English — professional but accessible, like a quality newspaper columnist covering a developing story. Concise sentences, varied rhythm. Contractions are fine. Avoid slang. NEVER use words like \'revolutionizing\', \'transforming\', \'disrupting\', \'paradigm\', \'landscape\', \'unprecedented\', \'game-changing\'. Be direct — say what happened and why it matters. No hashtags. No links. No ellipsis. Each tweet MUST be under 270 characters.',
     })
 
-    const tweetPrompt = `Write a 3-tweet breaking news thread about this story.
-
-Headline: ${finalHeadline}
-Summary: ${finalSummary}
-Sector: ${finalSector}
-
-Tweet 1: Hook — grab attention with the core news (under 270 chars)
-Tweet 2: Details — key facts and context (under 270 chars)
-Tweet 3: Impact — what this means for workers (under 275 chars)`
+    const tweetPrompt = `Write a 3-tweet breaking news thread.\n\nHeadline: ${finalHeadline}\nSummary: ${finalSummary}\nSector: ${finalSector}\n\nTweet 1 (max 270 chars): Urgent hook — what happened\nTweet 2 (max 270 chars): Key details and facts\nTweet 3 (max 270 chars): Why this matters for workers`
 
     const tweetResult = await tweetModel.generateContent({
       contents: [{ role: 'user', parts: [{ text: tweetPrompt }] }],
@@ -566,21 +610,21 @@ Tweet 3: Impact — what this means for workers (under 275 chars)`
           functionDeclarations: [
             {
               name: 'generate_breaking_thread',
-              description: 'Generate a 3-tweet breaking news thread',
+              description: 'Generate a 3-tweet breaking news thread body (tweets 1-3). Tweet 4 (poll) is added automatically.',
               parameters: {
                 type: SchemaType.OBJECT as const,
                 properties: {
                   tweet1: {
                     type: SchemaType.STRING as const,
-                    description: 'Hook tweet, under 270 chars',
+                    description: 'Hook tweet: urgent, attention-grabbing opener about what happened. Max 270 chars. No links, no hashtags.',
                   },
                   tweet2: {
                     type: SchemaType.STRING as const,
-                    description: 'Details tweet, under 270 chars',
+                    description: 'Detail tweet: key facts, numbers, who\'s affected. Max 270 chars. No links, no hashtags.',
                   },
                   tweet3: {
                     type: SchemaType.STRING as const,
-                    description: 'Impact tweet, under 275 chars',
+                    description: 'Impact tweet: why this matters for workers and the industry. Max 270 chars. No links, no hashtags.',
                   },
                 },
                 required: ['tweet1', 'tweet2', 'tweet3'],
@@ -601,22 +645,17 @@ Tweet 3: Impact — what this means for workers (under 275 chars)`
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const tweetArgs = tweetFc?.args as any
 
-    const tweet1 = trimToFit(tweetArgs?.tweet1 ?? finalHeadline, 270)
-    const tweet2 = trimToFit(tweetArgs?.tweet2 ?? finalSummary, 270)
-    const tweet3 = trimToFit(tweetArgs?.tweet3 ?? `This affects workers in the ${finalSector} sector.`, 275)
-
     const emoji = SECTOR_EMOJI[finalSector] ?? '🚨'
-    const tweet4 = trimToFit(
-      `${emoji} Full analysis with sources:\n\naijobclock.com/blog/${blogSlug}\n\nFollow @AIJobclock for real-time AI job impact updates\n\n#AI #FutureOfWork #AIJobClock`,
-      280,
-    )
-
-    const threadTweets = [tweet1, tweet2, tweet3, tweet4]
+    const tweet1 = trimToFit(`🚨 BREAKING\n\n${tweetArgs?.tweet1 ?? finalHeadline}`, 280)
+    const tweet2 = trimToFit(`${emoji} ${tweetArgs?.tweet2 ?? finalSummary}`, 270)
+    const tweet3 = trimToFit(tweetArgs?.tweet3 ?? `This affects workers in the ${finalSector} sector.`, 275)
+    const pollQuestion = trimToFit(`${emoji} How will this impact jobs in this sector?`, 200)
+    const pollOptions = ['Major disruption ahead', 'Gradual shift', 'Net positive for jobs', 'Too early to tell']
 
     // -----------------------------------------------------------------------
     // Generate and upload hero image
     // -----------------------------------------------------------------------
-    const imagePrompt = `Photorealistic cinematic landscape 16:9 representing breaking news: ${finalHeadline}. Editorial photography quality, Reuters/AP style, moody dramatic lighting, shallow depth of field. No text, no overlays, no watermarks.`
+    const imagePrompt = `Generate a photorealistic, cinematic image for Twitter/X (landscape 16:9) that visually represents this breaking news:\nTitle: "${finalHeadline}"\nSummary: "${finalSummary}"\n\nScene requirements: depict the tension between a small low-cost AI device fleet and large enterprise software power, with knowledge workers and corporate systems in the same frame.\nStyle: dramatic photorealistic scene, editorial photography quality, Reuters/AP style, moody cinematic lighting, shallow depth of field.\nStrictly no text, no logos, no overlays, no watermarks, no infographic elements.`
 
     const imageDataUrl = await generateImage(imagePrompt)
     if (!imageDataUrl) {
@@ -648,12 +687,20 @@ Tweet 3: Impact — what this means for workers (under 275 chars)`
     let lastId = result1.id
 
     if (result1.success) {
-      for (const tweetText of [tweet2, tweet3, tweet4]) {
+      await delay(1500)
+      const res2 = await postTweet(tweet2, ck, cs, at, ats, lastId)
+      tweetResults.push({ tweet: tweet2, ...res2 })
+      if (res2.success) {
+        lastId = res2.id
         await delay(1500)
-        const res = await postTweet(tweetText, ck, cs, at, ats, lastId)
-        tweetResults.push({ tweet: tweetText, ...res })
-        if (!res.success) break
-        lastId = res.id
+        const res3 = await postTweet(tweet3, ck, cs, at, ats, lastId)
+        tweetResults.push({ tweet: tweet3, ...res3 })
+        if (res3.success) {
+          lastId = res3.id
+          await delay(1500)
+          const res4 = await postTweet(pollQuestion, ck, cs, at, ats, lastId, undefined, { options: pollOptions, duration_minutes: 1440 })
+          tweetResults.push({ tweet: pollQuestion, ...res4 })
+        }
       }
     }
 
@@ -767,20 +814,55 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ skipped: true, reason: 'no_results' })
     }
 
+    const cappedCandidates = candidates.slice(0, 10)
+
+    // -----------------------------------------------------------------------
+    // Fetch recent article titles for deduplication
+    // -----------------------------------------------------------------------
+    const { data: recentArticles } = await supabase
+      .from('news_articles')
+      .select('title')
+      .order('scraped_at', { ascending: false })
+      .limit(50)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const recentTitles = (recentArticles ?? []).map((a: any) => a.title as string)
+
     // -----------------------------------------------------------------------
     // AI scoring
     // -----------------------------------------------------------------------
-    const candidateContext = candidates
-      .map(
-        (c, i) =>
-          `[${i}] ${c.headline}\n${c.summary}\n${c.source_url ?? ''}`,
-      )
-      .join('\n\n')
+    const candidatesList = cappedCandidates
+      .map((c, i) => `${i + 1}. "${c.headline}" — ${c.summary}`)
+      .join('\n')
+
+    const scoringSystemPrompt = `You are a breaking news editor for AI Job Clock (aijobclock.com), an AI employment displacement tracker.
+
+Review these news stories from the last 24 hours and determine if ANY represent genuine BREAKING NEWS worthy of an urgent alert.
+
+BREAKING NEWS criteria (score 8-10):
+- Major AI product launch that directly threatens entire job categories (e.g., GPT-5, Gemini 3, a new autonomous AI agent platform)
+- Mass layoff of 1,000+ people explicitly citing AI as the reason
+- Landmark AI regulation signed into law by a major government
+- Fortune 500 company announcing complete AI workforce replacement in a division
+- Major AI safety incident with employment implications
+
+NOT breaking (score 1-4):
+- Routine AI product updates or minor features
+- Small layoffs or normal business restructuring
+- Opinion pieces, research papers, or speculation
+- Incremental AI progress or benchmark improvements
+- Job market reports or surveys
+
+IMPORTANT: Be extremely selective. At most 1 story per week should qualify as breaking. Most runs should return no breaking news.
+
+Recent headlines already covered (avoid duplicates):
+${recentTitles.slice(0, 20).join('\n')}
+
+Candidate stories:
+${candidatesList}`
 
     const scoringModel = getClient().getGenerativeModel({
       model: 'gemini-2.5-flash',
-      systemInstruction:
-        'Breaking news editor for AI Job Clock. At most 1 story/week qualifies. Most runs: no breaking. Score 8-10 only for: major AI product launches threatening job categories, mass layoffs 1000+ citing AI, landmark AI regulation signed, Fortune 500 announcing AI workforce replacement, major AI safety incident. NOT: routine updates, small layoffs, opinion pieces, incremental progress.',
+      systemInstruction: scoringSystemPrompt,
     })
 
     const scoringResult = await scoringModel.generateContent({
@@ -789,7 +871,7 @@ export async function GET(request: NextRequest) {
           role: 'user',
           parts: [
             {
-              text: `Evaluate these ${candidates.length} news candidates. Pick the most breaking story about AI's impact on jobs, if any qualifies.\n\nCandidates:\n${candidateContext}`,
+              text: 'Evaluate these stories. Use the evaluate_breaking_news tool to return your assessment.',
             },
           ],
         },
@@ -828,7 +910,7 @@ export async function GET(request: NextRequest) {
                     format: 'enum',
                     description: 'Sector affected',
                     enum: [
-                      'Technology',
+                      'Tech',
                       'Finance',
                       'Healthcare',
                       'Manufacturing',
@@ -889,7 +971,7 @@ export async function GET(request: NextRequest) {
     // -----------------------------------------------------------------------
     // We have a breaking story — proceed with publishing
     // -----------------------------------------------------------------------
-    const selectedCandidate = candidates[evaluation.story_index] ?? candidates[0]
+    const selectedCandidate = cappedCandidates[evaluation.story_index] ?? cappedCandidates[0]
     const finalHeadline = evaluation.headline || selectedCandidate.headline
     const finalSummary = evaluation.summary || selectedCandidate.summary
     const finalSector = evaluation.sector || selectedCandidate.sector
@@ -897,23 +979,38 @@ export async function GET(request: NextRequest) {
     // -----------------------------------------------------------------------
     // Generate blog post
     // -----------------------------------------------------------------------
-    const articleModel = getClient().getGenerativeModel({
-      model: 'gemini-2.5-flash',
-      systemInstruction:
-        'Senior analyst at AI Job Clock. Breaking news analysis. Open with what happened, worker impact, comparison with existing models, concrete estimates, forward-looking perspective.',
-    })
+    const customContext = ''
 
-    const articlePrompt = `Write an 800-1200 word markdown blog post analyzing this breaking AI news story for workers and jobs.
+    const articleSystemPrompt = `You are a senior analyst at AI Job Clock (aijobclock.com), writing a BREAKING NEWS analysis.
+
+Write a detailed breaking news article (800-1200 words) in markdown format about this story:
 
 Headline: ${finalHeadline}
 Summary: ${finalSummary}
+Source: ${selectedCandidate?.source_url || 'Multiple sources'}
+URL: ${selectedCandidate?.url || 'N/A'}
 Sector: ${finalSector}
-${selectedCandidate.source_url ? `Source: ${selectedCandidate.source_url}` : ''}
+${customContext}
 
-Structure: What happened → Worker impact → Comparison with existing automation → Concrete job estimates → What to watch for.`
+The article should:
+1. Open with the breaking news — what happened, when, and why it matters
+2. Explain the technology or product in detail and how it works in practice
+3. Analyze immediate and medium-term employment impact in the ${finalSector} sector
+4. Discuss competitive landscape and what differentiates this development
+5. Include concrete estimates, scenarios, and constraints (cost, reliability, regulation, adoption)
+6. End with a clear forward-looking perspective for workers and employers
+7. Use markdown headings (##, ###), bold, and bullet points for readability
+
+Write in a sharp, editorial tone — urgent but analytical. This is breaking news, not a press release.
+Do NOT include a title heading — the title will be displayed separately.`
+
+    const articleModel = getClient().getGenerativeModel({
+      model: 'gemini-2.5-flash',
+      systemInstruction: articleSystemPrompt,
+    })
 
     const articleResult = await articleModel.generateContent({
-      contents: [{ role: 'user', parts: [{ text: articlePrompt }] }],
+      contents: [{ role: 'user', parts: [{ text: 'Write the breaking news article now. Use the publish_breaking_article tool.' }] }],
       tools: [ // eslint-disable-next-line @typescript-eslint/no-explicit-any
         {
           functionDeclarations: [
@@ -1005,18 +1102,10 @@ Structure: What happened → Worker impact → Comparison with existing automati
     const tweetModel = getClient().getGenerativeModel({
       model: 'gemini-2.5-flash',
       systemInstruction:
-        'Breaking news tweets about AI and jobs. Like quality newspaper columnist. No: revolutionizing, transforming, disrupting, paradigm, landscape, unprecedented, game-changing. No hashtags. No links. No ellipsis.',
+        'You write breaking news tweets about AI and jobs. Write in clear, confident English — professional but accessible, like a quality newspaper columnist covering a developing story. Concise sentences, varied rhythm. Contractions are fine. Avoid slang. NEVER use words like \'revolutionizing\', \'transforming\', \'disrupting\', \'paradigm\', \'landscape\', \'unprecedented\', \'game-changing\'. Be direct — say what happened and why it matters. No hashtags. No links. No ellipsis. Each tweet MUST be under 270 characters.',
     })
 
-    const tweetPrompt = `Write a 3-tweet breaking news thread about this story.
-
-Headline: ${finalHeadline}
-Summary: ${finalSummary}
-Sector: ${finalSector}
-
-Tweet 1: Hook — grab attention with the core news (under 270 chars)
-Tweet 2: Details — key facts and context (under 270 chars)
-Tweet 3: Impact — what this means for workers (under 275 chars)`
+    const tweetPrompt = `Write a 3-tweet breaking news thread.\n\nHeadline: ${finalHeadline}\nSummary: ${finalSummary}\nSector: ${finalSector}\n\nTweet 1 (max 270 chars): Urgent hook — what happened\nTweet 2 (max 270 chars): Key details and facts\nTweet 3 (max 270 chars): Why this matters for workers`
 
     const tweetResult = await tweetModel.generateContent({
       contents: [{ role: 'user', parts: [{ text: tweetPrompt }] }],
@@ -1025,21 +1114,21 @@ Tweet 3: Impact — what this means for workers (under 275 chars)`
           functionDeclarations: [
             {
               name: 'generate_breaking_thread',
-              description: 'Generate a 3-tweet breaking news thread',
+              description: 'Generate a 3-tweet breaking news thread body (tweets 1-3). Tweet 4 (poll) is added automatically.',
               parameters: {
                 type: SchemaType.OBJECT as const,
                 properties: {
                   tweet1: {
                     type: SchemaType.STRING as const,
-                    description: 'Hook tweet, under 270 chars',
+                    description: 'Hook tweet: urgent, attention-grabbing opener about what happened. Max 270 chars. No links, no hashtags.',
                   },
                   tweet2: {
                     type: SchemaType.STRING as const,
-                    description: 'Details tweet, under 270 chars',
+                    description: 'Detail tweet: key facts, numbers, who\'s affected. Max 270 chars. No links, no hashtags.',
                   },
                   tweet3: {
                     type: SchemaType.STRING as const,
-                    description: 'Impact tweet, under 275 chars',
+                    description: 'Impact tweet: why this matters for workers and the industry. Max 270 chars. No links, no hashtags.',
                   },
                 },
                 required: ['tweet1', 'tweet2', 'tweet3'],
@@ -1060,22 +1149,17 @@ Tweet 3: Impact — what this means for workers (under 275 chars)`
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const tweetArgs = tweetFc?.args as any
 
-    const tweet1 = trimToFit(tweetArgs?.tweet1 ?? finalHeadline, 270)
-    const tweet2 = trimToFit(tweetArgs?.tweet2 ?? finalSummary, 270)
-    const tweet3 = trimToFit(tweetArgs?.tweet3 ?? `This affects workers in the ${finalSector} sector.`, 275)
-
     const emoji = SECTOR_EMOJI[finalSector] ?? '🚨'
-    const tweet4 = trimToFit(
-      `${emoji} Full analysis with sources:\n\naijobclock.com/blog/${blogSlug}\n\nFollow @AIJobclock for real-time AI job impact updates\n\n#AI #FutureOfWork #AIJobClock`,
-      280,
-    )
-
-    const threadTweets = [tweet1, tweet2, tweet3, tweet4]
+    const tweet1 = trimToFit(`🚨 BREAKING\n\n${tweetArgs?.tweet1 ?? finalHeadline}`, 280)
+    const tweet2 = trimToFit(`${emoji} ${tweetArgs?.tweet2 ?? finalSummary}`, 270)
+    const tweet3 = trimToFit(tweetArgs?.tweet3 ?? `This affects workers in the ${finalSector} sector.`, 275)
+    const pollQuestion = trimToFit(`${emoji} How will this impact jobs in this sector?`, 200)
+    const pollOptions = ['Major disruption ahead', 'Gradual shift', 'Net positive for jobs', 'Too early to tell']
 
     // -----------------------------------------------------------------------
     // Generate and upload hero image
     // -----------------------------------------------------------------------
-    const imagePrompt = `Photorealistic cinematic landscape 16:9 representing breaking news: ${finalHeadline}. Editorial photography quality, Reuters/AP style, moody dramatic lighting, shallow depth of field. No text, no overlays, no watermarks.`
+    const imagePrompt = `Generate a photorealistic, cinematic image for Twitter/X (landscape 16:9) that visually represents this breaking news:\nTitle: "${finalHeadline}"\nSummary: "${finalSummary}"\n\nScene requirements: depict the tension between a small low-cost AI device fleet and large enterprise software power, with knowledge workers and corporate systems in the same frame.\nStyle: dramatic photorealistic scene, editorial photography quality, Reuters/AP style, moody cinematic lighting, shallow depth of field.\nStrictly no text, no logos, no overlays, no watermarks, no infographic elements.`
 
     const imageDataUrl = await generateImage(imagePrompt)
     if (!imageDataUrl) {
@@ -1107,12 +1191,20 @@ Tweet 3: Impact — what this means for workers (under 275 chars)`
     let lastId = result1.id
 
     if (result1.success) {
-      for (const tweetText of [tweet2, tweet3, tweet4]) {
+      await delay(1500)
+      const res2 = await postTweet(tweet2, ck, cs, at, ats, lastId)
+      tweetResults.push({ tweet: tweet2, ...res2 })
+      if (res2.success) {
+        lastId = res2.id
         await delay(1500)
-        const res = await postTweet(tweetText, ck, cs, at, ats, lastId)
-        tweetResults.push({ tweet: tweetText, ...res })
-        if (!res.success) break
-        lastId = res.id
+        const res3 = await postTweet(tweet3, ck, cs, at, ats, lastId)
+        tweetResults.push({ tweet: tweet3, ...res3 })
+        if (res3.success) {
+          lastId = res3.id
+          await delay(1500)
+          const res4 = await postTweet(pollQuestion, ck, cs, at, ats, lastId, undefined, { options: pollOptions, duration_minutes: 1440 })
+          tweetResults.push({ tweet: pollQuestion, ...res4 })
+        }
       }
     }
 
