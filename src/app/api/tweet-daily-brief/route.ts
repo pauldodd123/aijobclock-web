@@ -187,13 +187,10 @@ function buildSectorTweet(
   riskLabel: string,
   sectorTag: string,
 ): string {
-  // Match old Lovable wording: "X AI stories tracked today" when no risk label,
-  // "X stories tracked · risk" when risk label is present
-  const countLabel = count > 0
-    ? (riskLabel ? `${count} stories tracked` : `${count} AI stories tracked today`)
-    : null
-  const statsParts = [countLabel, riskLabel || null].filter(Boolean)
-  const statsDisplay = statsParts.length > 0 ? `\n\n📊 ${statsParts.join(' · ')}` : ''
+  // Always show stats even when count=0 (matches old Lovable behaviour)
+  const statsDisplay = riskLabel
+    ? `\n\n📊 ${count} stories tracked · ${riskLabel}`
+    : `\n\n📊 ${count} AI stories tracked today`
   return trimToFit(
     `${emoji} ${sector} ${trendEmoji}\n\n${teaser}${statsDisplay}\n\n#AI #${sectorTag} #AIJobs`,
     280,
@@ -209,12 +206,10 @@ function getSectorTweetBudget(
   sectorTag: string,
 ): number {
   const header = `${emoji} ${sector} ${trendEmoji}\n\n`
-  // Use the longer variant ("AI stories tracked today") for budget calculation to be safe
-  const countLabel = count > 0
-    ? (riskLabel ? `${count} stories tracked` : `${count} AI stories tracked today`)
-    : null
-  const statsParts = [countLabel, riskLabel || null].filter(Boolean)
-  const statsDisplay = statsParts.length > 0 ? `\n\n📊 ${statsParts.join(' · ')}` : ''
+  // Always show stats even when count=0 (matches old Lovable behaviour)
+  const statsDisplay = riskLabel
+    ? `\n\n📊 ${count} stories tracked · ${riskLabel}`
+    : `\n\n📊 ${count} AI stories tracked today`
   const footer = `${statsDisplay}\n\n#AI #${sectorTag} #AIJobs`
   return Math.max(50, 280 - header.length - footer.length - 5)
 }
@@ -276,12 +271,16 @@ async function fetchRoundupData(today: string) {
 
   const sectorCounts: Record<string, number> = {}
   const topHeadlines: Record<string, string[]> = {}
+  const globalTopHeadlines: string[] = []
 
   for (const article of newsArticles ?? []) {
     sectorCounts[article.sector] = (sectorCounts[article.sector] ?? 0) + 1
     if (!topHeadlines[article.sector]) topHeadlines[article.sector] = []
     if (topHeadlines[article.sector].length < 3) {
       topHeadlines[article.sector].push(article.title)
+    }
+    if (globalTopHeadlines.length < 5) {
+      globalTopHeadlines.push(article.title)
     }
   }
 
@@ -337,7 +336,7 @@ async function fetchRoundupData(today: string) {
     }
   })
 
-  return { posts, rankedSectors, activeSectors, sectorInputs, sectorCounts, topHeadlines }
+  return { posts, rankedSectors, activeSectors, sectorInputs, sectorCounts, topHeadlines, globalTopHeadlines }
 }
 
 // ---------------------------------------------------------------------------
@@ -391,15 +390,15 @@ RULES:
           role: 'user',
           parts: [
             {
-              text: `Write a tweet thread hook and sector teasers for today's AI job impact briefing.
+              text: `Generate content for today's AI Job Clock thread.
 
-Hook budget: ${hookBudget} characters (NO hashtags, just the hook sentence)
-Date: ${dateLabel}
+HOOK (max ${hookBudget} chars): Write 2-3 sentences. Lead with the most striking specific finding (a number, a company name, a concrete fact). Then add a second insight or contrast that makes readers want the full thread. Use the full character budget — more substance performs better.
 
-Sectors to cover:
-${sectorContext}
+SECTOR TEASERS (each has its own char limit):
+${sectorInputs.map((s) => `- "${s.sector}": max ${s.teaserBudget} chars. Source: ${s.post?.title ?? 'N/A'}${s.post?.summary ? ' — ' + s.post.summary : ''}`).join('\n')}
 
-For each sector teaser: be specific, punchy, and newsworthy. Use actual numbers or concrete examples where available. Respect the character budget strictly.`,
+Stories:
+${sectorInputs.map((s) => `${s.sector}: ${s.post?.title ?? 'N/A'}${s.post?.summary ? ' — ' + s.post.summary : ''}`).join('\n')}`,
             },
           ],
         },
@@ -416,7 +415,7 @@ For each sector teaser: be specific, punchy, and newsworthy. Use actual numbers 
                 properties: {
                   hook: {
                     type: SchemaType.STRING as const,
-                    description: `A punchy 1-2 sentence hook about today's most striking AI job finding. MUST be under ${hookBudget} characters. No hashtags.`,
+                    description: `A compelling 2-3 sentence hook about today's most striking AI job finding. Lead with a specific fact or number, then add context or a second insight. MUST be under ${hookBudget} characters. No hashtags.`,
                   },
                   sectors: {
                     type: SchemaType.ARRAY as const,
@@ -498,10 +497,7 @@ function buildThread(
     thread.push({ label: `Tweet ${i + 2} (${s.sector})`, text, chars: text.length })
   }
 
-  const pollText = trimToFit(
-    `Which sector has AI hit hardest today?\n\n#AI #FutureOfWork #AIJobs`,
-    280,
-  )
+  const pollText = trimToFit(`Which sector will AI disrupt most this year?`, 280)
   thread.push({
     label: `Tweet ${sectorInputs.length + 2} (Poll)`,
     text: pollText,
@@ -591,7 +587,7 @@ export async function POST(request: NextRequest) {
   // roundup / booster — fetch common data
   // -------------------------------------------------------------------------
   try {
-    const { posts, rankedSectors, activeSectors, sectorInputs } = await fetchRoundupData(today)
+    const { posts, rankedSectors, activeSectors, sectorInputs, sectorCounts, globalTopHeadlines } = await fetchRoundupData(today)
     const dateLabel = formatDate(today)
 
     // -----------------------------------------------------------------------
@@ -611,9 +607,9 @@ export async function POST(request: NextRequest) {
         )
       }
 
-      // Booster uses the old "Sector Alert" format with a blog link — distinct from roundup sector tweets
+      // Booster uses the "Sector Alert" format — no blog links (matches old Lovable version)
       const boosterHeader = `${s.emoji} ${s.sector} Sector Alert — ${dateLabel}\n\n`
-      const boosterFooter = `\n\n${s.count} AI-related stories tracked today in ${s.sector}.\n\nFull briefing → aijobclock.com/blog/${s.post.id}\n\n#AI #${s.sectorTag} #FutureOfWork #AIJobClock`
+      const boosterFooter = `\n\n${s.count} AI-related stories tracked today in ${s.sector}.\n\n#AI #${s.sectorTag} #FutureOfWork #AIJobClock`
       const boosterBudget = 280 - boosterHeader.length - boosterFooter.length
       const teaser = trimToFit(s.post.summary ?? s.post.title, boosterBudget)
       const tweetText = trimToFit(`${boosterHeader}${teaser}${boosterFooter}`, 280)
@@ -630,14 +626,14 @@ export async function POST(request: NextRequest) {
     // roundup mode
     // -----------------------------------------------------------------------
     const dayOfYear = Math.floor(
-      (new Date(today + 'T00:00:00Z').getTime() -
-        new Date(today.slice(0, 4) + '-01-01T00:00:00Z').getTime()) /
-        (1000 * 60 * 60 * 24),
+      (Date.now() - new Date(today.slice(0, 4) + '-01-01T00:00:00Z').getTime()) / 86400000,
     )
-    const engagementQ = ENGAGEMENT_QS[dayOfYear % ENGAGEMENT_QS.length]
 
+    const totalArticles = Object.values(sectorCounts).reduce((a, b) => a + b, 0)
+    const activeSectorCount = rankedSectors.length
+    const statsLine = `\n\n📊 ${totalArticles} stories tracked across ${activeSectorCount} sectors today`
     const prefix = `⚡ AI Job Clock — ${dateLabel}\n\n`
-    const suffix = `\n\n${engagementQ} 👇\n\n🧵`
+    const suffix = `${statsLine}\n\n🧵👇`
     const hookBudget = 280 - prefix.length - suffix.length
 
     const { hookText: aiHook, sectorTeasers } = await generateThreadContent(
@@ -648,7 +644,7 @@ export async function POST(request: NextRequest) {
 
     let hookText = aiHook
     if (!hookText) {
-      const topPost = posts?.[0]
+      const topPost = posts?.find((p) => p.sector === activeSectors[0]?.sector)
       hookText = trimToFit(topPost?.summary ?? topPost?.title ?? 'AI is reshaping the job market faster than most people realize.', hookBudget)
     }
 
@@ -668,18 +664,32 @@ export async function POST(request: NextRequest) {
 
     // Live posting
     let heroMediaId: string | undefined
-    if (process.env.GOOGLE_AI_API_KEY && posts?.[0]) {
+    const topPost = posts?.find((p) => p.sector === activeSectors[0]?.sector)
+    if (process.env.GOOGLE_AI_API_KEY && topPost) {
       try {
-        const topSector = sectorInputs[0]?.sector ?? ''
+        const topSector = activeSectors[0]?.sector ?? ''
         const imageContext =
-          sectorInputs[0]?.headlines?.length > 0
-            ? sectorInputs[0].headlines.slice(0, 3).join('; ')
-            : (posts[0].summary ?? posts[0].title)
-        const imagePrompt = `Generate a photorealistic, cinematic image for Twitter/X (landscape 16:9) that visually represents this news story: "${posts[0].title}" — ${imageContext}. Sector: ${topSector}.
+          globalTopHeadlines.length > 0
+            ? globalTopHeadlines.slice(0, 3).join('; ')
+            : (topPost.summary ?? topPost.title)
+        const imagePrompt = `Generate a photorealistic, cinematic image for Twitter/X (landscape 16:9) that visually represents this news story: "${topPost.title}" — ${imageContext}. Sector: ${topSector}.
 
 Style: dramatic photorealistic scene, editorial photography quality, moody cinematic lighting, shallow depth of field. No text, no overlays, no watermarks, no infographic elements. The image should tell the story visually — show the real-world impact through people, workplaces, or technology. Think Reuters/AP photo quality.`
         const imageDataUrl = await generateImage(imagePrompt)
         if (imageDataUrl) {
+          // Save to Supabase bucket (tweet-images) before uploading to X
+          try {
+            const supabaseImg = await createAdminClient()
+            const rawBase64 = imageDataUrl.replace(/^data:image\/\w+;base64,/, '')
+            const bytes = Uint8Array.from(atob(rawBase64), (c) => c.charCodeAt(0))
+            const fileName = `roundup-${today}.png`
+            await supabaseImg.storage.from('tweet-images').upload(fileName, bytes, {
+              contentType: 'image/png',
+              upsert: true,
+            })
+          } catch (bucketErr) {
+            console.error('tweet-daily-brief bucket upload error:', bucketErr)
+          }
           const mediaId = await uploadMediaToTwitter(imageDataUrl, ck, cs, at, ats)
           if (mediaId) heroMediaId = mediaId
         }
@@ -766,7 +776,7 @@ export async function GET(request: NextRequest) {
   const today = new Date().toISOString().split('T')[0]
 
   try {
-    const { posts, rankedSectors, activeSectors, sectorInputs } = await fetchRoundupData(today)
+    const { posts, rankedSectors, activeSectors, sectorInputs, sectorCounts: getCounts, globalTopHeadlines: getGlobalTopHeadlines } = await fetchRoundupData(today)
     const dateLabel = formatDate(today)
 
     if (!posts || posts.length === 0) {
@@ -774,14 +784,14 @@ export async function GET(request: NextRequest) {
     }
 
     const dayOfYear = Math.floor(
-      (new Date(today + 'T00:00:00Z').getTime() -
-        new Date(today.slice(0, 4) + '-01-01T00:00:00Z').getTime()) /
-        (1000 * 60 * 60 * 24),
+      (Date.now() - new Date(today.slice(0, 4) + '-01-01T00:00:00Z').getTime()) / 86400000,
     )
-    const engagementQ = ENGAGEMENT_QS[dayOfYear % ENGAGEMENT_QS.length]
 
+    const totalArticlesGet = Object.values(getCounts).reduce((a, b) => a + b, 0)
+    const activeSectorCountGet = rankedSectors.length
+    const statsLineGet = `\n\n📊 ${totalArticlesGet} stories tracked across ${activeSectorCountGet} sectors today`
     const prefix = `⚡ AI Job Clock — ${dateLabel}\n\n`
-    const suffix = `\n\n${engagementQ} 👇\n\n🧵`
+    const suffix = `${statsLineGet}\n\n🧵👇`
     const hookBudget = 280 - prefix.length - suffix.length
 
     const { hookText: aiHook, sectorTeasers } = await generateThreadContent(
@@ -792,7 +802,7 @@ export async function GET(request: NextRequest) {
 
     let hookText = aiHook
     if (!hookText) {
-      const topPost = posts[0]
+      const topPost = posts.find((p) => p.sector === activeSectors[0]?.sector)
       hookText = trimToFit(topPost?.summary ?? topPost?.title ?? 'AI is reshaping the job market faster than most people realize.', hookBudget)
     }
 
@@ -818,18 +828,32 @@ export async function GET(request: NextRequest) {
     // Live posting (Vercel cron hits GET)
     // -----------------------------------------------------------------------
     let heroMediaId: string | undefined
-    if (process.env.GOOGLE_AI_API_KEY && posts[0]) {
+    const getTopPost = posts.find((p) => p.sector === activeSectors[0]?.sector)
+    if (process.env.GOOGLE_AI_API_KEY && getTopPost) {
       try {
-        const topSector = sectorInputs[0]?.sector ?? ''
+        const topSector = activeSectors[0]?.sector ?? ''
         const imageContext =
-          sectorInputs[0]?.headlines?.length > 0
-            ? sectorInputs[0].headlines.slice(0, 3).join('; ')
-            : (posts[0].summary ?? posts[0].title)
-        const imagePrompt = `Generate a photorealistic, cinematic image for Twitter/X (landscape 16:9) that visually represents this news story: "${posts[0].title}" — ${imageContext}. Sector: ${topSector}.
+          getGlobalTopHeadlines.length > 0
+            ? getGlobalTopHeadlines.slice(0, 3).join('; ')
+            : (getTopPost.summary ?? getTopPost.title)
+        const imagePrompt = `Generate a photorealistic, cinematic image for Twitter/X (landscape 16:9) that visually represents this news story: "${getTopPost.title}" — ${imageContext}. Sector: ${topSector}.
 
 Style: dramatic photorealistic scene, editorial photography quality, moody cinematic lighting, shallow depth of field. No text, no overlays, no watermarks, no infographic elements. The image should tell the story visually — show the real-world impact through people, workplaces, or technology. Think Reuters/AP photo quality.`
         const imageDataUrl = await generateImage(imagePrompt)
         if (imageDataUrl) {
+          // Save to Supabase bucket (tweet-images) before uploading to X
+          try {
+            const supabaseImg = await createAdminClient()
+            const rawBase64 = imageDataUrl.replace(/^data:image\/\w+;base64,/, '')
+            const bytes = Uint8Array.from(atob(rawBase64), (c) => c.charCodeAt(0))
+            const fileName = `roundup-${today}.png`
+            await supabaseImg.storage.from('tweet-images').upload(fileName, bytes, {
+              contentType: 'image/png',
+              upsert: true,
+            })
+          } catch (bucketErr) {
+            console.error('tweet-daily-brief bucket upload error:', bucketErr)
+          }
           const mediaId = await uploadMediaToTwitter(imageDataUrl, ck, cs, at, ats)
           if (mediaId) heroMediaId = mediaId
         }
