@@ -72,7 +72,7 @@ async function generateForSector(sector: string, supabase: Awaited<ReturnType<ty
     .join('\n\n')
 
   const model = getClient().getGenerativeModel({
-    model: 'gemini-2.5-flash',
+    model: 'gemini-3-flash-preview',
     systemInstruction:
       'You are an expert technology journalist writing daily briefings about AI\'s impact on jobs and industries. Write in an engaging, editorial style. Be insightful and analytical, not just descriptive. Consider current trending themes in AI and technology. IMPORTANT: Each briefing must feel fresh — avoid repeating headlines, angles, or themes from recent days.',
   })

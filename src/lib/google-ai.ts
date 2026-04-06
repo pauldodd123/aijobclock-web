@@ -32,8 +32,7 @@ export async function generateText(
  */
 export async function generateImage(prompt: string): Promise<string | null> {
   const models = [
-    "gemini-2.5-flash-image",
-    "gemini-2.0-flash-exp",
+    "gemini-3-pro-image-preview",
   ];
 
   for (const modelName of models) {
