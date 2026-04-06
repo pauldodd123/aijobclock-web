@@ -187,13 +187,9 @@ function buildSectorTweet(
   riskLabel: string,
   sectorTag: string,
 ): string {
-  // Match old Lovable wording: "X AI stories tracked today" when no risk label,
-  // "X stories tracked · risk" when risk label is present
-  const countLabel = count > 0
-    ? (riskLabel ? `${count} stories tracked` : `${count} AI stories tracked today`)
-    : null
+  const countLabel = riskLabel ? `${count} stories tracked` : `${count} AI stories tracked today`
   const statsParts = [countLabel, riskLabel || null].filter(Boolean)
-  const statsDisplay = statsParts.length > 0 ? `\n\n📊 ${statsParts.join(' · ')}` : ''
+  const statsDisplay = `\n\n📊 ${statsParts.join(' · ')}`
   return trimToFit(
     `${emoji} ${sector} ${trendEmoji}\n\n${teaser}${statsDisplay}\n\n#AI #${sectorTag} #AIJobs`,
     280,
@@ -209,12 +205,9 @@ function getSectorTweetBudget(
   sectorTag: string,
 ): number {
   const header = `${emoji} ${sector} ${trendEmoji}\n\n`
-  // Use the longer variant ("AI stories tracked today") for budget calculation to be safe
-  const countLabel = count > 0
-    ? (riskLabel ? `${count} stories tracked` : `${count} AI stories tracked today`)
-    : null
+  const countLabel = riskLabel ? `${count} stories tracked` : `${count} AI stories tracked today`
   const statsParts = [countLabel, riskLabel || null].filter(Boolean)
-  const statsDisplay = statsParts.length > 0 ? `\n\n📊 ${statsParts.join(' · ')}` : ''
+  const statsDisplay = `\n\n📊 ${statsParts.join(' · ')}`
   const footer = `${statsDisplay}\n\n#AI #${sectorTag} #AIJobs`
   return Math.max(50, 280 - header.length - footer.length - 5)
 }
@@ -277,12 +270,14 @@ async function fetchRoundupData(today: string) {
   const sectorCounts: Record<string, number> = {}
   const topHeadlines: Record<string, string[]> = {}
 
+  const globalHeadlines: string[] = []
   for (const article of newsArticles ?? []) {
     sectorCounts[article.sector] = (sectorCounts[article.sector] ?? 0) + 1
     if (!topHeadlines[article.sector]) topHeadlines[article.sector] = []
     if (topHeadlines[article.sector].length < 3) {
       topHeadlines[article.sector].push(article.title)
     }
+    if (globalHeadlines.length < 5) globalHeadlines.push(article.title)
   }
 
   // Rank by article count; fall back to blog_posts order if no articles scraped yet
@@ -337,7 +332,7 @@ async function fetchRoundupData(today: string) {
     }
   })
 
-  return { posts, rankedSectors, activeSectors, sectorInputs, sectorCounts, topHeadlines }
+  return { posts, rankedSectors, activeSectors, sectorInputs, sectorCounts, topHeadlines, globalHeadlines }
 }
 
 // ---------------------------------------------------------------------------
@@ -354,21 +349,19 @@ async function generateThreadContent(
 
   if (!process.env.GOOGLE_AI_API_KEY) return { hookText, sectorTeasers }
 
-  const sectorContext = sectorInputs
-    .map((s) => {
-      const headlineList =
-        s.headlines.length > 0
-          ? s.headlines.map((h) => `  - ${h}`).join('\n')
-          : '  (no raw headlines — use blog post summary below)'
-      const countNote =
-        s.count > 0 ? `${s.count} stories tracked today` : 'blog post summary (no article count)'
-      return `Sector: ${s.sector} (${countNote})
-Post title: ${s.post?.title ?? 'N/A'}
-Post summary: ${s.post?.summary ?? 'N/A'}
-Top headlines:\n${headlineList}
-Teaser budget: ${s.teaserBudget} chars`
-    })
-    .join('\n\n')
+  const sectorInstructions = sectorInputs
+    .map(
+      (s) =>
+        `- "${s.sector}": max ${s.teaserBudget} chars. Source: ${s.post?.title ?? 'N/A'}${s.post?.summary ? ' — ' + s.post.summary : ''}`,
+    )
+    .join('\n')
+
+  const storyContext = sectorInputs
+    .map(
+      (s) =>
+        `${s.sector}: ${s.post?.title ?? 'N/A'}${s.post?.summary ? ' — ' + s.post.summary : ''}`,
+    )
+    .join('\n')
 
   try {
     const aiModel = getClient().getGenerativeModel({
@@ -391,15 +384,7 @@ RULES:
           role: 'user',
           parts: [
             {
-              text: `Write a tweet thread hook and sector teasers for today's AI job impact briefing.
-
-Hook budget: ${hookBudget} characters (NO hashtags, just the hook sentence)
-Date: ${dateLabel}
-
-Sectors to cover:
-${sectorContext}
-
-For each sector teaser: be specific, punchy, and newsworthy. Use actual numbers or concrete examples where available. Respect the character budget strictly.`,
+              text: `Generate content for today's AI Job Clock thread.\n\nHOOK (max ${hookBudget} chars): Write 2-3 sentences. Lead with the most striking specific finding (a number, a company name, a concrete fact). Then add a second insight or contrast that makes readers want the full thread. Use the full character budget — more substance performs better.\n\nSECTOR TEASERS (each has its own char limit):\n${sectorInstructions}\n\nStories:\n${storyContext}`,
             },
           ],
         },
@@ -416,7 +401,7 @@ For each sector teaser: be specific, punchy, and newsworthy. Use actual numbers 
                 properties: {
                   hook: {
                     type: SchemaType.STRING as const,
-                    description: `A punchy 1-2 sentence hook about today's most striking AI job finding. MUST be under ${hookBudget} characters. No hashtags.`,
+                    description: `A compelling 2-3 sentence hook about today's most striking AI job finding. Lead with a specific fact or number, then add context or a second insight. MUST be under ${hookBudget} characters. No hashtags.`,
                   },
                   sectors: {
                     type: SchemaType.ARRAY as const,
@@ -498,10 +483,7 @@ function buildThread(
     thread.push({ label: `Tweet ${i + 2} (${s.sector})`, text, chars: text.length })
   }
 
-  const pollText = trimToFit(
-    `Which sector has AI hit hardest today?\n\n#AI #FutureOfWork #AIJobs`,
-    280,
-  )
+  const pollText = trimToFit(`Which sector will AI disrupt most this year?`, 280)
   thread.push({
     label: `Tweet ${sectorInputs.length + 2} (Poll)`,
     text: pollText,
@@ -591,7 +573,7 @@ export async function POST(request: NextRequest) {
   // roundup / booster — fetch common data
   // -------------------------------------------------------------------------
   try {
-    const { posts, rankedSectors, activeSectors, sectorInputs } = await fetchRoundupData(today)
+    const { posts, rankedSectors, activeSectors, sectorInputs, sectorCounts, globalHeadlines } = await fetchRoundupData(today)
     const dateLabel = formatDate(today)
 
     // -----------------------------------------------------------------------
@@ -613,7 +595,7 @@ export async function POST(request: NextRequest) {
 
       // Booster uses the old "Sector Alert" format with a blog link — distinct from roundup sector tweets
       const boosterHeader = `${s.emoji} ${s.sector} Sector Alert — ${dateLabel}\n\n`
-      const boosterFooter = `\n\n${s.count} AI-related stories tracked today in ${s.sector}.\n\nFull briefing → aijobclock.com/blog/${s.post.id}\n\n#AI #${s.sectorTag} #FutureOfWork #AIJobClock`
+      const boosterFooter = `\n\n${s.count} AI-related stories tracked today in ${s.sector}.\n\n#AI #${s.sectorTag} #FutureOfWork #AIJobClock`
       const boosterBudget = 280 - boosterHeader.length - boosterFooter.length
       const teaser = trimToFit(s.post.summary ?? s.post.title, boosterBudget)
       const tweetText = trimToFit(`${boosterHeader}${teaser}${boosterFooter}`, 280)
@@ -629,15 +611,12 @@ export async function POST(request: NextRequest) {
     // -----------------------------------------------------------------------
     // roundup mode
     // -----------------------------------------------------------------------
-    const dayOfYear = Math.floor(
-      (new Date(today + 'T00:00:00Z').getTime() -
-        new Date(today.slice(0, 4) + '-01-01T00:00:00Z').getTime()) /
-        (1000 * 60 * 60 * 24),
-    )
-    const engagementQ = ENGAGEMENT_QS[dayOfYear % ENGAGEMENT_QS.length]
+    const totalArticles = Object.values(sectorCounts).reduce((a: number, b: number) => a + b, 0)
+    const activeSectorCount = rankedSectors.length
 
     const prefix = `⚡ AI Job Clock — ${dateLabel}\n\n`
-    const suffix = `\n\n${engagementQ} 👇\n\n🧵`
+    const statsLineSuffix = `\n\n📊 ${totalArticles} stories tracked across ${activeSectorCount} sectors today`
+    const suffix = `${statsLineSuffix}\n\n🧵👇`
     const hookBudget = 280 - prefix.length - suffix.length
 
     const { hookText: aiHook, sectorTeasers } = await generateThreadContent(
@@ -648,12 +627,15 @@ export async function POST(request: NextRequest) {
 
     let hookText = aiHook
     if (!hookText) {
-      const topPost = posts?.[0]
+      const topPost = posts?.find((p) => p.sector === activeSectors[0]?.sector)
       hookText = trimToFit(topPost?.summary ?? topPost?.title ?? 'AI is reshaping the job market faster than most people realize.', hookBudget)
     }
 
     const hookTweet = `${prefix}${hookText}${suffix}`
-    const pollOptions = activeSectors.slice(0, 4).map((s) => s.sector)
+    const pollOptions = activeSectors.slice(0, 4).map((s) => s.sector.slice(0, 25))
+    if (pollOptions.length < 2) {
+      pollOptions.push('Too early to tell', 'None significantly')
+    }
     const thread = buildThread(hookTweet, sectorInputs, sectorTeasers, pollOptions)
 
     if (dryRun) {
@@ -671,10 +653,11 @@ export async function POST(request: NextRequest) {
     if (process.env.GOOGLE_AI_API_KEY && posts?.[0]) {
       try {
         const topSector = sectorInputs[0]?.sector ?? ''
+        const topPost = posts.find((p) => p.sector === activeSectors[0]?.sector)
         const imageContext =
-          sectorInputs[0]?.headlines?.length > 0
-            ? sectorInputs[0].headlines.slice(0, 3).join('; ')
-            : (posts[0].summary ?? posts[0].title)
+          globalHeadlines.length > 0
+            ? globalHeadlines.slice(0, 3).join('; ')
+            : (topPost?.summary ?? topPost?.title ?? posts[0].summary ?? posts[0].title)
         const imagePrompt = `Generate a photorealistic, cinematic image for Twitter/X (landscape 16:9) that visually represents this news story: "${posts[0].title}" — ${imageContext}. Sector: ${topSector}.
 
 Style: dramatic photorealistic scene, editorial photography quality, moody cinematic lighting, shallow depth of field. No text, no overlays, no watermarks, no infographic elements. The image should tell the story visually — show the real-world impact through people, workplaces, or technology. Think Reuters/AP photo quality.`
@@ -682,6 +665,17 @@ Style: dramatic photorealistic scene, editorial photography quality, moody cinem
         if (imageDataUrl) {
           const mediaId = await uploadMediaToTwitter(imageDataUrl, ck, cs, at, ats)
           if (mediaId) heroMediaId = mediaId
+          // Also persist to Supabase storage
+          try {
+            const rawBase64 = imageDataUrl.replace(/^data:image\/\w+;base64,/, '')
+            const buffer = Buffer.from(rawBase64, 'base64')
+            const supabaseImg = await createAdminClient()
+            await supabaseImg.storage
+              .from('tweet-images')
+              .upload(`roundup-${today}.png`, buffer, { contentType: 'image/png', upsert: true })
+          } catch (storageErr) {
+            console.error('tweet-daily-brief storage upload error:', storageErr)
+          }
         }
       } catch (imgErr) {
         console.error('tweet-daily-brief image generation error:', imgErr)
@@ -766,22 +760,19 @@ export async function GET(request: NextRequest) {
   const today = new Date().toISOString().split('T')[0]
 
   try {
-    const { posts, rankedSectors, activeSectors, sectorInputs } = await fetchRoundupData(today)
+    const { posts, rankedSectors, activeSectors, sectorInputs, sectorCounts, globalHeadlines } = await fetchRoundupData(today)
     const dateLabel = formatDate(today)
 
     if (!posts || posts.length === 0) {
       return NextResponse.json({ message: 'No posts found for today', date: today })
     }
 
-    const dayOfYear = Math.floor(
-      (new Date(today + 'T00:00:00Z').getTime() -
-        new Date(today.slice(0, 4) + '-01-01T00:00:00Z').getTime()) /
-        (1000 * 60 * 60 * 24),
-    )
-    const engagementQ = ENGAGEMENT_QS[dayOfYear % ENGAGEMENT_QS.length]
+    const totalArticles = Object.values(sectorCounts).reduce((a: number, b: number) => a + b, 0)
+    const activeSectorCount = rankedSectors.length
 
     const prefix = `⚡ AI Job Clock — ${dateLabel}\n\n`
-    const suffix = `\n\n${engagementQ} 👇\n\n🧵`
+    const statsLineSuffix = `\n\n📊 ${totalArticles} stories tracked across ${activeSectorCount} sectors today`
+    const suffix = `${statsLineSuffix}\n\n🧵👇`
     const hookBudget = 280 - prefix.length - suffix.length
 
     const { hookText: aiHook, sectorTeasers } = await generateThreadContent(
@@ -792,12 +783,15 @@ export async function GET(request: NextRequest) {
 
     let hookText = aiHook
     if (!hookText) {
-      const topPost = posts[0]
+      const topPost = posts.find((p) => p.sector === activeSectors[0]?.sector)
       hookText = trimToFit(topPost?.summary ?? topPost?.title ?? 'AI is reshaping the job market faster than most people realize.', hookBudget)
     }
 
     const hookTweet = `${prefix}${hookText}${suffix}`
-    const pollOptions = activeSectors.slice(0, 4).map((s) => s.sector)
+    const pollOptions = activeSectors.slice(0, 4).map((s) => s.sector.slice(0, 25))
+    if (pollOptions.length < 2) {
+      pollOptions.push('Too early to tell', 'None significantly')
+    }
     const thread = buildThread(hookTweet, sectorInputs, sectorTeasers, pollOptions)
 
     // -----------------------------------------------------------------------
@@ -821,10 +815,11 @@ export async function GET(request: NextRequest) {
     if (process.env.GOOGLE_AI_API_KEY && posts[0]) {
       try {
         const topSector = sectorInputs[0]?.sector ?? ''
+        const topPost = posts.find((p) => p.sector === activeSectors[0]?.sector)
         const imageContext =
-          sectorInputs[0]?.headlines?.length > 0
-            ? sectorInputs[0].headlines.slice(0, 3).join('; ')
-            : (posts[0].summary ?? posts[0].title)
+          globalHeadlines.length > 0
+            ? globalHeadlines.slice(0, 3).join('; ')
+            : (topPost?.summary ?? topPost?.title ?? posts[0].summary ?? posts[0].title)
         const imagePrompt = `Generate a photorealistic, cinematic image for Twitter/X (landscape 16:9) that visually represents this news story: "${posts[0].title}" — ${imageContext}. Sector: ${topSector}.
 
 Style: dramatic photorealistic scene, editorial photography quality, moody cinematic lighting, shallow depth of field. No text, no overlays, no watermarks, no infographic elements. The image should tell the story visually — show the real-world impact through people, workplaces, or technology. Think Reuters/AP photo quality.`
@@ -832,6 +827,17 @@ Style: dramatic photorealistic scene, editorial photography quality, moody cinem
         if (imageDataUrl) {
           const mediaId = await uploadMediaToTwitter(imageDataUrl, ck, cs, at, ats)
           if (mediaId) heroMediaId = mediaId
+          // Also persist to Supabase storage
+          try {
+            const rawBase64 = imageDataUrl.replace(/^data:image\/\w+;base64,/, '')
+            const buffer = Buffer.from(rawBase64, 'base64')
+            const supabaseImg = await createAdminClient()
+            await supabaseImg.storage
+              .from('tweet-images')
+              .upload(`roundup-${today}.png`, buffer, { contentType: 'image/png', upsert: true })
+          } catch (storageErr) {
+            console.error('tweet-daily-brief storage upload error:', storageErr)
+          }
         }
       } catch (imgErr) {
         console.error('tweet-daily-brief image generation error:', imgErr)

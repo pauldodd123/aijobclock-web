@@ -26,19 +26,19 @@ async function generateForSector(sector: string, supabase: Awaited<ReturnType<ty
 
   let { data: articles } = await supabase
     .from('news_articles')
-    .select('title, url, summary, source_name, published_at')
+    .select('title, url, summary, source_name, scraped_at')
     .eq('sector', sector)
-    .gte('published_at', cutoff48h)
-    .order('published_at', { ascending: false })
+    .gte('scraped_at', cutoff48h)
+    .order('scraped_at', { ascending: false })
     .limit(20)
 
   if (!articles || articles.length === 0) {
     const { data: wider } = await supabase
       .from('news_articles')
-      .select('title, url, summary, source_name, published_at')
+      .select('title, url, summary, source_name, scraped_at')
       .eq('sector', sector)
-      .gte('published_at', cutoff7d)
-      .order('published_at', { ascending: false })
+      .gte('scraped_at', cutoff7d)
+      .order('scraped_at', { ascending: false })
       .limit(20)
     articles = wider
   }
@@ -76,7 +76,7 @@ async function generateForSector(sector: string, supabase: Awaited<ReturnType<ty
 
   const articleContext = articles
     .map(
-      (a: { title: string; url: string; summary: string; source_name?: string; published_at: string }, i: number) =>
+      (a: { title: string; url: string; summary: string; source_name?: string; scraped_at: string }, i: number) =>
         `${i + 1}. "${a.title}"${a.source_name ? ` (${a.source_name})` : ''}\n   ${a.summary ?? 'No summary'}\n   URL: ${a.url}`,
     )
     .join('\n\n')
