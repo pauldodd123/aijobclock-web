@@ -2,6 +2,7 @@ import { HeroClock } from '@/components/HeroClock';
 import { BreakingNewsBanner } from '@/components/BreakingNewsBanner';
 import { OpinionBanner } from '@/components/OpinionBanner';
 import { NewsletterSignup } from '@/components/NewsletterSignup';
+import { NewsletterInlineCTA } from '@/components/NewsletterInlineCTA';
 import { ShareBar } from '@/components/ShareBar';
 import { NewsFeed } from '@/components/NewsFeed';
 import { SectorBreakdown } from '@/components/SectorBreakdown';
@@ -107,6 +108,7 @@ export default function Home() {
       </header>
 
       <HeroClock />
+      <NewsletterInlineCTA />
       <NewsFeed />
       <SectorBreakdown />
 
