@@ -384,7 +384,7 @@ RULES:
           role: 'user',
           parts: [
             {
-              text: `Generate content for today's AI Job Clock thread.\n\nHOOK (max ${hookBudget} chars): Write 2-3 sentences. Lead with the most striking specific finding (a number, a company name, a concrete fact). Then add a second insight or contrast that makes readers want the full thread. Use the full character budget — more substance performs better.\n\nSECTOR TEASERS (each has its own char limit):\n${sectorInstructions}\n\nStories:\n${storyContext}`,
+              text: `Generate content for today's AI Job Clock thread.\n\nHOOK (max ${hookBudget} chars): This is the FIRST thing people see — it must open with the single most striking fact, number, or development from today's news. No intro, no "AI Job Clock", no date. Start mid-sentence if needed. Example openings: "Goldman Sachs just cut 300 roles in its London operations…" or "For the first time, AI outperformed radiologists in a large-scale NHS trial." Pick the sharpest, most specific story. Then add one sentence of context or contrast that makes readers want the full thread. Never use vague openers like "AI is changing everything" or "Today's briefing covers".\n\nSECTOR TEASERS (each has its own char limit):\n${sectorInstructions}\n\nStories:\n${storyContext}`,
             },
           ],
         },
@@ -614,10 +614,8 @@ export async function POST(request: NextRequest) {
     const totalArticles = Object.values(sectorCounts).reduce((a: number, b: number) => a + b, 0)
     const activeSectorCount = rankedSectors.length
 
-    const prefix = `⚡ AI Job Clock — ${dateLabel}\n\n`
-    const statsLineSuffix = `\n\n📊 ${totalArticles} stories tracked across ${activeSectorCount} sectors today`
-    const suffix = `${statsLineSuffix}\n\n🧵👇`
-    const hookBudget = 280 - prefix.length - suffix.length
+    const suffix = `\n\n⚡ AI Job Clock · ${dateLabel} | ${totalArticles} stories across ${activeSectorCount} sectors\n🧵`
+    const hookBudget = 280 - suffix.length
 
     const { hookText: aiHook, sectorTeasers } = await generateThreadContent(
       sectorInputs,
@@ -631,7 +629,7 @@ export async function POST(request: NextRequest) {
       hookText = trimToFit(topPost?.summary ?? topPost?.title ?? 'AI is reshaping the job market faster than most people realize.', hookBudget)
     }
 
-    const hookTweet = `${prefix}${hookText}${suffix}`
+    const hookTweet = `${trimToFit(hookText, hookBudget)}${suffix}`
     const pollOptions = activeSectors.slice(0, 4).map((s) => s.sector.slice(0, 25))
     if (pollOptions.length < 2) {
       pollOptions.push('Too early to tell', 'None significantly')
@@ -770,10 +768,8 @@ export async function GET(request: NextRequest) {
     const totalArticles = Object.values(sectorCounts).reduce((a: number, b: number) => a + b, 0)
     const activeSectorCount = rankedSectors.length
 
-    const prefix = `⚡ AI Job Clock — ${dateLabel}\n\n`
-    const statsLineSuffix = `\n\n📊 ${totalArticles} stories tracked across ${activeSectorCount} sectors today`
-    const suffix = `${statsLineSuffix}\n\n🧵👇`
-    const hookBudget = 280 - prefix.length - suffix.length
+    const suffix = `\n\n⚡ AI Job Clock · ${dateLabel} | ${totalArticles} stories across ${activeSectorCount} sectors\n🧵`
+    const hookBudget = 280 - suffix.length
 
     const { hookText: aiHook, sectorTeasers } = await generateThreadContent(
       sectorInputs,
@@ -787,7 +783,7 @@ export async function GET(request: NextRequest) {
       hookText = trimToFit(topPost?.summary ?? topPost?.title ?? 'AI is reshaping the job market faster than most people realize.', hookBudget)
     }
 
-    const hookTweet = `${prefix}${hookText}${suffix}`
+    const hookTweet = `${trimToFit(hookText, hookBudget)}${suffix}`
     const pollOptions = activeSectors.slice(0, 4).map((s) => s.sector.slice(0, 25))
     if (pollOptions.length < 2) {
       pollOptions.push('Too early to tell', 'None significantly')
