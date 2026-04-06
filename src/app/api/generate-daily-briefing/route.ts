@@ -26,7 +26,7 @@ async function generateForSector(sector: string, supabase: Awaited<ReturnType<ty
 
   let { data: articles } = await supabase
     .from('news_articles')
-    .select('title, url, summary, published_at')
+    .select('title, url, summary, source_name, published_at')
     .eq('sector', sector)
     .gte('published_at', cutoff48h)
     .order('published_at', { ascending: false })
@@ -35,7 +35,7 @@ async function generateForSector(sector: string, supabase: Awaited<ReturnType<ty
   if (!articles || articles.length === 0) {
     const { data: wider } = await supabase
       .from('news_articles')
-      .select('title, url, summary, published_at')
+      .select('title, url, summary, source_name, published_at')
       .eq('sector', sector)
       .gte('published_at', cutoff7d)
       .order('published_at', { ascending: false })
@@ -54,41 +54,54 @@ async function generateForSector(sector: string, supabase: Awaited<ReturnType<ty
     .order('published_date', { ascending: false })
     .limit(7)
 
+  const { data: termGuide } = await supabase
+    .from('terminology_guides')
+    .select('guide_content')
+    .eq('sector', sector)
+    .maybeSingle()
+
+  const terminologyContext = termGuide?.guide_content
+    ? `\n\nTERMINOLOGY GUIDE — Follow this closely for correct industry language:\n${termGuide.guide_content}`
+    : ''
+
   const previousContext =
     recentPosts && recentPosts.length > 0
       ? `\n\nPREVIOUS BRIEFINGS (avoid repeating these themes, angles, and headlines):\n${recentPosts
           .map(
-            (p: { title: string; summary: string; published_date: string }) =>
-              `- ${p.published_date}: ${p.title} — ${p.summary}`,
+            (p: { title: string; summary: string; published_date: string }, i: number) =>
+              `${i + 1}. [${p.published_date}] "${p.title}" — ${p.summary ?? 'No summary'}`,
           )
-          .join('\n')}\n`
+          .join('\n')}`
       : ''
 
   const articleContext = articles
     .map(
-      (a: { title: string; url: string; summary: string; published_at: string }) =>
-        `- ${a.title} (${a.published_at})\n  ${a.summary ?? ''}\n  ${a.url}`,
+      (a: { title: string; url: string; summary: string; source_name?: string; published_at: string }, i: number) =>
+        `${i + 1}. "${a.title}"${a.source_name ? ` (${a.source_name})` : ''}\n   ${a.summary ?? 'No summary'}\n   URL: ${a.url}`,
     )
     .join('\n\n')
 
   const model = getClient().getGenerativeModel({
     model: 'gemini-3-flash-preview',
     systemInstruction:
-      'You are an expert technology journalist writing daily briefings about AI\'s impact on jobs and industries. Write in an engaging, editorial style. Be insightful and analytical, not just descriptive. Consider current trending themes in AI and technology. IMPORTANT: Each briefing must feel fresh — avoid repeating headlines, angles, or themes from recent days.',
+      `You are an expert technology journalist writing daily briefings about AI's impact on jobs and industries. Write in an engaging, editorial style. Be insightful and analytical, not just descriptive. Consider current trending themes in AI and technology. IMPORTANT: Each briefing must feel fresh — avoid repeating headlines, angles, or themes from recent days.${terminologyContext}`,
   })
 
-  const userPrompt = `Write a daily briefing blog post for the '${sector}' sector based on today's scraped news articles below.
+  const userPrompt = `Write a daily briefing blog post for the "${sector}" sector based on today's scraped news articles below.
 
 Requirements:
 - Create an engaging headline that is DIFFERENT from recent briefings listed below
-- 1-2 sentence summary
-- Full markdown content, 500-800 words
-- Reference specific articles from the list
+- Write a 1-2 sentence summary/excerpt
+- Write the full blog post in markdown (500-800 words)
+- Reference specific articles and sources from the data
 - Identify NEW trending themes and patterns — do NOT rehash themes from previous briefings
 - Include analysis of what this means for workers in this sector
-- Forward-looking perspective
+- End with a forward-looking perspective
+- Use correct industry terminology throughout — refer to the terminology guide in your system instructions
 ${previousContext}
-Today's articles:
+
+Today's articles for ${sector}:
+
 ${articleContext}`
 
   const result = await model.generateContent({
