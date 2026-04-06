@@ -69,7 +69,7 @@ async function postTweet(
   if (mediaIds?.length) body.media = { media_ids: mediaIds }
   if (pollOptions?.length) {
     body.poll = {
-      options: pollOptions.map((o) => ({ label: o })),
+      options: pollOptions,
       duration_minutes: 1440, // 24 hours
     }
   }
