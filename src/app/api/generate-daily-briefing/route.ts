@@ -93,11 +93,12 @@ Requirements:
 - Create an engaging headline that is DIFFERENT from recent briefings listed below
 - Write a 1-2 sentence summary/excerpt
 - Write the full blog post in markdown (500-800 words)
-- Reference specific articles and sources from the data
+- Cite sources inline throughout the text — when referencing a specific finding or story, attribute it with the source name in natural prose (e.g. "according to Reuters" or "a report from Bloomberg found...")
 - Identify NEW trending themes and patterns — do NOT rehash themes from previous briefings
 - Include analysis of what this means for workers in this sector
 - End with a forward-looking perspective
 - Use correct industry terminology throughout — refer to the terminology guide in your system instructions
+- Do NOT include a Sources section — that will be appended automatically
 ${previousContext}
 
 Today's articles for ${sector}:
@@ -141,6 +142,15 @@ ${articleContext}`
     return 'error - no content generated'
   }
 
+  const sourcesSection = articles
+    .filter((a) => a.url && a.title)
+    .map((a) => `- [${a.title}](${a.url})${a.source_name ? ` — ${a.source_name}` : ''}`)
+    .join('\n')
+
+  const contentWithSources = sourcesSection
+    ? `${args.content}\n\n## Sources\n\n${sourcesSection}`
+    : args.content
+
   const publishedDate = today.toISOString().split('T')[0]
   const slug = args.title
     .toLowerCase()
@@ -155,7 +165,7 @@ ${articleContext}`
         sector,
         title: args.title,
         summary: args.summary ?? '',
-        content: args.content,
+        content: contentWithSources,
         published_date: publishedDate,
         slug,
       },
