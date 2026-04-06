@@ -332,8 +332,9 @@ export async function GET(request: NextRequest) {
     )
   }
 
-  // For GET, default to weekly frequency
-  const targetFrequency: string = 'weekly'
+  // For GET, read frequency from query param (used by cron), default to weekly
+  const { searchParams } = new URL(request.url)
+  const targetFrequency: string = searchParams.get('frequency') ?? 'weekly'
 
   const supabase = await createAdminClient()
 
