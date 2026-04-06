@@ -18,7 +18,11 @@
             "schedule": "0 12 * * *"
     },
     {
-      "path": "/api/send-newsletter",
+      "path": "/api/send-newsletter?frequency=daily",
+      "schedule": "0 8 * * *"
+    },
+    {
+      "path": "/api/send-newsletter?frequency=weekly",
       "schedule": "0 8 * * 1"
     }
   ]
