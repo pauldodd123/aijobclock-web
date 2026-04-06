@@ -13,13 +13,13 @@ export function getClient(): GoogleGenerativeAI {
   return _client;
 }
 
-export function getGeminiModel(modelName = "gemini-1.5-pro") {
+export function getGeminiModel(modelName = "gemini-2.5-flash") {
   return getClient().getGenerativeModel({ model: modelName });
 }
 
 export async function generateText(
   prompt: string,
-  modelName = "gemini-1.5-pro",
+  modelName = "gemini-2.5-flash",
 ): Promise<string> {
   const model = getGeminiModel(modelName);
   const result = await model.generateContent(prompt);
