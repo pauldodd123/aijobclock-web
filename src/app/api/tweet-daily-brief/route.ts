@@ -125,6 +125,11 @@ function trimToFit(text: string, max: number): string {
   if (text.length <= max) return text
   const trimmed = text.slice(0, max - 1)
   const lastSpace = trimmed.lastIndexOf(' ')
+  const lastPeriod = trimmed.lastIndexOf('. ')
+  // Prefer sentence boundary if close enough
+  if (lastPeriod > max * 0.6) {
+    return trimmed.slice(0, lastPeriod + 1)
+  }
   if (lastSpace > 0) return trimmed.slice(0, lastSpace) + '…'
   return trimmed + '…'
 }
@@ -182,10 +187,12 @@ function buildSectorTweet(
   riskLabel: string,
   sectorTag: string,
 ): string {
-  const statsParts = [
-    count > 0 ? `${count} stories tracked` : null,
-    riskLabel || null,
-  ].filter(Boolean)
+  // Match old Lovable wording: "X AI stories tracked today" when no risk label,
+  // "X stories tracked · risk" when risk label is present
+  const countLabel = count > 0
+    ? (riskLabel ? `${count} stories tracked` : `${count} AI stories tracked today`)
+    : null
+  const statsParts = [countLabel, riskLabel || null].filter(Boolean)
   const statsDisplay = statsParts.length > 0 ? `\n\n📊 ${statsParts.join(' · ')}` : ''
   return trimToFit(
     `${emoji} ${sector} ${trendEmoji}\n\n${teaser}${statsDisplay}\n\n#AI #${sectorTag} #AIJobs`,
@@ -202,10 +209,11 @@ function getSectorTweetBudget(
   sectorTag: string,
 ): number {
   const header = `${emoji} ${sector} ${trendEmoji}\n\n`
-  const statsParts = [
-    count > 0 ? `${count} stories tracked` : null,
-    riskLabel || null,
-  ].filter(Boolean)
+  // Use the longer variant ("AI stories tracked today") for budget calculation to be safe
+  const countLabel = count > 0
+    ? (riskLabel ? `${count} stories tracked` : `${count} AI stories tracked today`)
+    : null
+  const statsParts = [countLabel, riskLabel || null].filter(Boolean)
   const statsDisplay = statsParts.length > 0 ? `\n\n📊 ${statsParts.join(' · ')}` : ''
   const footer = `${statsDisplay}\n\n#AI #${sectorTag} #AIJobs`
   return Math.max(50, 280 - header.length - footer.length - 5)
@@ -365,8 +373,16 @@ Teaser budget: ${s.teaserBudget} chars`
   try {
     const aiModel = getClient().getGenerativeModel({
       model: 'gemini-2.5-flash',
-      systemInstruction:
-        "You write tweet content about AI's impact on jobs. Professional but accessible, like a quality newspaper columnist. NEVER use: revolutionizing, transforming, disrupting, paradigm, landscape, unprecedented, game-changing. No hashtags in content. Strictly respect every character limit. Never end with ellipsis or '…'. Think broadsheet columnist, not LinkedIn.",
+      systemInstruction: `You write tweet content about AI's impact on jobs. Write in clear, confident English — professional but accessible, like a quality newspaper columnist. Not a corporate press release, not a casual text message.
+
+RULES:
+- Keep sentences concise and direct. Vary sentence length for natural rhythm.
+- Contractions are fine. Avoid slang. Be direct without being blunt.
+- NEVER use words like "revolutionizing", "transforming", "disrupting", "paradigm", "landscape", "unprecedented", "leveraging", "synergy", "game-changing", "cutting-edge".
+- NEVER start with "Breaking:", "Alert:", or overly dramatic openers.
+- Be specific and concrete — real numbers, real examples, not vague claims.
+- No hashtags in the content. STRICTLY respect every character limit. Never end with "…" or ellipsis.
+- Tone: sharp, informed, measured. Think broadsheet columnist, not LinkedIn post.`,
     })
 
     const aiResult = await aiModel.generateContent({
@@ -400,7 +416,7 @@ For each sector teaser: be specific, punchy, and newsworthy. Use actual numbers 
                 properties: {
                   hook: {
                     type: SchemaType.STRING as const,
-                    description: `Hook text under ${hookBudget} chars, no hashtags`,
+                    description: `A punchy 1-2 sentence hook about today's most striking AI job finding. MUST be under ${hookBudget} characters. No hashtags.`,
                   },
                   sectors: {
                     type: SchemaType.ARRAY as const,
@@ -595,10 +611,12 @@ export async function POST(request: NextRequest) {
         )
       }
 
-      const teaser = trimToFit(s.post.summary ?? s.post.title, s.teaserBudget)
-      const tweetText = buildSectorTweet(
-        s.emoji, s.sector, s.trendEmoji, teaser, s.count, s.riskLabel, s.sectorTag,
-      )
+      // Booster uses the old "Sector Alert" format with a blog link — distinct from roundup sector tweets
+      const boosterHeader = `${s.emoji} ${s.sector} Sector Alert — ${dateLabel}\n\n`
+      const boosterFooter = `\n\n${s.count} AI-related stories tracked today in ${s.sector}.\n\nFull briefing → aijobclock.com/blog/${s.post.id}\n\n#AI #${s.sectorTag} #FutureOfWork #AIJobClock`
+      const boosterBudget = 280 - boosterHeader.length - boosterFooter.length
+      const teaser = trimToFit(s.post.summary ?? s.post.title, boosterBudget)
+      const tweetText = trimToFit(`${boosterHeader}${teaser}${boosterFooter}`, 280)
 
       if (dryRun) {
         return NextResponse.json({ date: today, mode: 'dry-run-booster', sector: s.sector, tweet: tweetText })
@@ -631,7 +649,7 @@ export async function POST(request: NextRequest) {
     let hookText = aiHook
     if (!hookText) {
       const topPost = posts?.[0]
-      hookText = trimToFit(topPost?.summary ?? topPost?.title ?? `${activeSectors.length} sectors tracked today`, hookBudget)
+      hookText = trimToFit(topPost?.summary ?? topPost?.title ?? 'AI is reshaping the job market faster than most people realize.', hookBudget)
     }
 
     const hookTweet = `${prefix}${hookText}${suffix}`
@@ -652,7 +670,14 @@ export async function POST(request: NextRequest) {
     let heroMediaId: string | undefined
     if (process.env.GOOGLE_AI_API_KEY && posts?.[0]) {
       try {
-        const imagePrompt = `Generate a photorealistic, cinematic image for Twitter/X (landscape 16:9) that visually represents this news story: ${posts[0].title} — AI's impact on jobs and workers today. Style: dramatic photorealistic scene, editorial photography quality, moody cinematic lighting, shallow depth of field. No text, no overlays, no watermarks. Think Reuters/AP photo quality.`
+        const topSector = sectorInputs[0]?.sector ?? ''
+        const imageContext =
+          sectorInputs[0]?.headlines?.length > 0
+            ? sectorInputs[0].headlines.slice(0, 3).join('; ')
+            : (posts[0].summary ?? posts[0].title)
+        const imagePrompt = `Generate a photorealistic, cinematic image for Twitter/X (landscape 16:9) that visually represents this news story: "${posts[0].title}" — ${imageContext}. Sector: ${topSector}.
+
+Style: dramatic photorealistic scene, editorial photography quality, moody cinematic lighting, shallow depth of field. No text, no overlays, no watermarks, no infographic elements. The image should tell the story visually — show the real-world impact through people, workplaces, or technology. Think Reuters/AP photo quality.`
         const imageDataUrl = await generateImage(imagePrompt)
         if (imageDataUrl) {
           const mediaId = await uploadMediaToTwitter(imageDataUrl, ck, cs, at, ats)
@@ -768,7 +793,7 @@ export async function GET(request: NextRequest) {
     let hookText = aiHook
     if (!hookText) {
       const topPost = posts[0]
-      hookText = trimToFit(topPost?.summary ?? topPost?.title ?? `${activeSectors.length} sectors tracked today`, hookBudget)
+      hookText = trimToFit(topPost?.summary ?? topPost?.title ?? 'AI is reshaping the job market faster than most people realize.', hookBudget)
     }
 
     const hookTweet = `${prefix}${hookText}${suffix}`
@@ -795,7 +820,14 @@ export async function GET(request: NextRequest) {
     let heroMediaId: string | undefined
     if (process.env.GOOGLE_AI_API_KEY && posts[0]) {
       try {
-        const imagePrompt = `Generate a photorealistic, cinematic image for Twitter/X (landscape 16:9) that visually represents this news story: ${posts[0].title} — AI's impact on jobs and workers today. Style: dramatic photorealistic scene, editorial photography quality, moody cinematic lighting, shallow depth of field. No text, no overlays, no watermarks. Think Reuters/AP photo quality.`
+        const topSector = sectorInputs[0]?.sector ?? ''
+        const imageContext =
+          sectorInputs[0]?.headlines?.length > 0
+            ? sectorInputs[0].headlines.slice(0, 3).join('; ')
+            : (posts[0].summary ?? posts[0].title)
+        const imagePrompt = `Generate a photorealistic, cinematic image for Twitter/X (landscape 16:9) that visually represents this news story: "${posts[0].title}" — ${imageContext}. Sector: ${topSector}.
+
+Style: dramatic photorealistic scene, editorial photography quality, moody cinematic lighting, shallow depth of field. No text, no overlays, no watermarks, no infographic elements. The image should tell the story visually — show the real-world impact through people, workplaces, or technology. Think Reuters/AP photo quality.`
         const imageDataUrl = await generateImage(imagePrompt)
         if (imageDataUrl) {
           const mediaId = await uploadMediaToTwitter(imageDataUrl, ck, cs, at, ats)
