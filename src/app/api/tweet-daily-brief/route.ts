@@ -290,7 +290,7 @@ async function fetchRoundupData(today: string) {
       ? newsRankedSectors
       : (posts ?? []).map((p) => ({ sector: p.sector, count: 0 }))
 
-  const activeSectors = rankedSectors.slice(0, 6)
+  const activeSectors = rankedSectors.slice(0, 4)
 
   const { data: sectorStatsRaw } = await supabase
     .from('sector_stats')
