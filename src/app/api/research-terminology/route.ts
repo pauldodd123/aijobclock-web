@@ -168,9 +168,9 @@ ${researchContent ? `\n\nUse the following research material as reference:\n${re
 Be thorough. This guide will be injected into prompts daily to ensure authentic, credible writing about the ${sector} sector.`
 
   const model = getGeminiModel('gemini-2.5-flash')
-  const result = await model.generateContent([
-    { role: 'user', parts: [{ text: systemPrompt + '\n\n' + userPrompt }] },
-  ])
+  const result = await model.generateContent({
+    contents: [{ role: 'user', parts: [{ text: systemPrompt + '\n\n' + userPrompt }] }],
+  })
   const guideContent = result.response.text()
 
   if (!guideContent) {
