@@ -282,9 +282,18 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const rankedSectors = Object.entries(sectorCounts)
+    // Build ranked sectors from news articles (may be empty if not scraped yet today)
+    const newsRankedSectors = Object.entries(sectorCounts)
       .sort(([, a], [, b]) => b - a)
       .map(([sector, count]) => ({ sector, count }))
+
+    // Fall back to blog_posts sectors if no news articles found today.
+    // Blog posts are generated daily and are always present; news articles may
+    // be scraped the previous evening so scraped_at can lag behind by a day.
+    const rankedSectors =
+      newsRankedSectors.length > 0
+        ? newsRankedSectors
+        : (posts ?? []).map((p) => ({ sector: p.sector, count: 0 }))
 
     const dateLabel = formatDate(today)
 
@@ -656,9 +665,14 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    const rankedSectors = Object.entries(sectorCounts)
+    const newsRankedSectors = Object.entries(sectorCounts)
       .sort(([, a], [, b]) => b - a)
       .map(([sector, count]) => ({ sector, count }))
+
+    const rankedSectors =
+      newsRankedSectors.length > 0
+        ? newsRankedSectors
+        : (posts ?? []).map((p) => ({ sector: p.sector, count: 0 }))
 
     const dateLabel = formatDate(today)
 

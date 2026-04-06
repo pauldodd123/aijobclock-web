@@ -56,7 +56,7 @@ async function generateForSector(sector: string, supabase: Awaited<ReturnType<ty
 
   const previousContext =
     recentPosts && recentPosts.length > 0
-      ? `\n\nRecent posts to avoid repeating:\n${recentPosts
+      ? `\n\nPREVIOUS BRIEFINGS (avoid repeating these themes, angles, and headlines):\n${recentPosts
           .map(
             (p: { title: string; summary: string; published_date: string }) =>
               `- ${p.published_date}: ${p.title} — ${p.summary}`,
@@ -80,12 +80,12 @@ async function generateForSector(sector: string, supabase: Awaited<ReturnType<ty
   const userPrompt = `Write a daily briefing blog post for the '${sector}' sector based on today's scraped news articles below.
 
 Requirements:
-- Engaging headline that is different from recent posts
+- Create an engaging headline that is DIFFERENT from recent briefings listed below
 - 1-2 sentence summary
 - Full markdown content, 500-800 words
 - Reference specific articles from the list
-- Identify NEW trends not covered recently
-- Worker impact analysis
+- Identify NEW trending themes and patterns — do NOT rehash themes from previous briefings
+- Include analysis of what this means for workers in this sector
 - Forward-looking perspective
 ${previousContext}
 Today's articles:
