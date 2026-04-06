@@ -268,8 +268,8 @@ export async function POST(request: NextRequest) {
     const { data: newsArticles } = await supabase
       .from('news_articles')
       .select('sector, title, summary')
-      .gte('published_at', dateStart)
-      .lte('published_at', dateEnd)
+      .gte('scraped_at', dateStart)
+      .lte('scraped_at', dateEnd)
 
     const sectorCounts: Record<string, number> = {}
     const topHeadlines: Record<string, string[]> = {}
@@ -642,8 +642,8 @@ export async function GET(request: NextRequest) {
     const { data: newsArticles } = await supabase
       .from('news_articles')
       .select('sector, title, summary')
-      .gte('published_at', dateStart)
-      .lte('published_at', dateEnd)
+      .gte('scraped_at', dateStart)
+      .lte('scraped_at', dateEnd)
 
     const sectorCounts: Record<string, number> = {}
     const topHeadlines: Record<string, string[]> = {}
