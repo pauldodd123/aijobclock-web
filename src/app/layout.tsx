@@ -12,12 +12,23 @@ const playfairDisplay = Playfair_Display({ variable: "--font-serif", subsets: ["
 const inter = Inter({ variable: "--font-sans", subsets: ["latin"] });
 
 export const metadata: Metadata = {
+  metadataBase: new URL("https://aijobclock.com"),
   title: { default: "AI Job Clock", template: "%s | AI Job Clock" },
-  description: "Tracking how AI is reshaping the job market — in real time.",
+  description:
+    "Real-time AI job displacement tracker. See how automation is reshaping the global workforce across technology, finance, healthcare, manufacturing, and more.",
   alternates: {
     types: {
-      'application/rss+xml': '/api/rss',
+      "application/rss+xml": "/api/rss",
     },
+  },
+  openGraph: {
+    siteName: "AI Job Clock",
+    type: "website",
+    images: [{ url: "/og-image.png", width: 1200, height: 630, alt: "AI Job Clock" }],
+  },
+  twitter: {
+    card: "summary_large_image",
+    images: ["/og-image.png"],
   },
 };
 

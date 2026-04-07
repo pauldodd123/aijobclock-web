@@ -1,3 +1,4 @@
+import type { Metadata } from 'next';
 import { HeroClock } from '@/components/HeroClock';
 import { BreakingNewsBanner } from '@/components/BreakingNewsBanner';
 import { OpinionBanner } from '@/components/OpinionBanner';
@@ -15,6 +16,26 @@ import {
   AccordionItem,
   AccordionTrigger,
 } from '@/components/ui/accordion';
+
+export const metadata: Metadata = {
+  title: "AI Job Clock — Real-Time AI Job Displacement Tracker",
+  description:
+    "Real-time AI job displacement tracker. See how automation is reshaping the global workforce across technology, finance, healthcare, manufacturing, and more.",
+  alternates: { canonical: "https://aijobclock.com" },
+  openGraph: {
+    title: "AI Job Clock — Real-Time AI Job Displacement Tracker",
+    description:
+      "Real-time AI job displacement tracker. See how automation is reshaping the global workforce across technology, finance, healthcare, manufacturing, and more.",
+    url: "https://aijobclock.com",
+    type: "website",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "AI Job Clock — Real-Time AI Job Displacement Tracker",
+    description:
+      "Real-time AI job displacement tracker. See how automation is reshaping the global workforce across technology, finance, healthcare, manufacturing, and more.",
+  },
+};
 
 const FAQ_ITEMS = [
   {
@@ -71,12 +92,12 @@ export default function Home() {
       <header className="border-b border-border">
         <div className="mx-auto max-w-5xl px-3 sm:px-6 py-3 sm:py-4 flex items-center justify-between">
           <Link href="/" className="shrink-0">
-            <h2
+            <h1
               className="text-base sm:text-lg font-black tracking-tight"
               style={{ fontFamily: 'var(--font-serif)' }}
             >
               AI Job Clock
-            </h2>
+            </h1>
             <p className="text-[9px] sm:text-[10px] text-muted-foreground/60 tracking-wide hidden sm:block">
               Tracking AI&apos;s impact on global employment
             </p>
@@ -107,6 +128,7 @@ export default function Home() {
         </div>
       </header>
 
+      <main>
       <HeroClock />
       <NewsletterInlineCTA />
       <NewsFeed />
@@ -183,6 +205,7 @@ export default function Home() {
           </Accordion>
         </div>
       </section>
+      </main>
 
       <footer className="border-t border-border py-10">
         <div className="mx-auto max-w-5xl px-6">

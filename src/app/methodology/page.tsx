@@ -7,6 +7,20 @@ export const metadata: Metadata = {
   title: 'Methodology',
   description:
     'How AI Job Clock calculates its live employment displacement figures — methodology, sources, and limitations.',
+  alternates: { canonical: 'https://aijobclock.com/methodology' },
+  openGraph: {
+    title: 'How AI Job Clock Works | AI Job Clock',
+    description:
+      'How AI Job Clock calculates its live employment displacement figures — methodology, sources, and limitations.',
+    url: 'https://aijobclock.com/methodology',
+    type: 'website',
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: 'How AI Job Clock Works | AI Job Clock',
+    description:
+      'How AI Job Clock calculates its live employment displacement figures — methodology, sources, and limitations.',
+  },
 };
 
 export default function MethodologyPage() {
