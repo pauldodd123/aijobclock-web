@@ -251,8 +251,10 @@ type SectorInput = {
 
 async function fetchRoundupData(today: string) {
   const supabase = await createAdminClient()
-  const dateStart = `${today}T00:00:00.000Z`
   const dateEnd = `${today}T23:59:59.999Z`
+  const todayMs = new Date(`${today}T00:00:00.000Z`).getTime()
+  const cutoff48h = new Date(todayMs - 48 * 60 * 60 * 1000).toISOString()
+  const cutoff7d = new Date(todayMs - 7 * 24 * 60 * 60 * 1000).toISOString()
 
   const { data: posts } = await supabase
     .from('blog_posts')
@@ -261,11 +263,21 @@ async function fetchRoundupData(today: string) {
     .lte('published_date', today)
     .order('sector', { ascending: true })
 
-  const { data: newsArticles } = await supabase
+  // Try 48h first, fall back to 7 days (mirrors generate-daily-briefing logic)
+  let { data: newsArticles } = await supabase
     .from('news_articles')
     .select('sector, title, summary')
-    .gte('scraped_at', dateStart)
+    .gte('scraped_at', cutoff48h)
     .lte('scraped_at', dateEnd)
+
+  if (!newsArticles || newsArticles.length === 0) {
+    const { data: wider } = await supabase
+      .from('news_articles')
+      .select('sector, title, summary')
+      .gte('scraped_at', cutoff7d)
+      .lte('scraped_at', dateEnd)
+    newsArticles = wider
+  }
 
   const sectorCounts: Record<string, number> = {}
   const topHeadlines: Record<string, string[]> = {}
@@ -749,7 +761,6 @@ export async function GET(request: NextRequest) {
 
   const url = new URL(request.url)
   const isPreview = url.searchParams.get('preview') === 'true'
-
   const ck = process.env.TWITTER_API_KEY!
   const cs = process.env.TWITTER_API_SECRET!
   const at = process.env.TWITTER_ACCESS_TOKEN!
