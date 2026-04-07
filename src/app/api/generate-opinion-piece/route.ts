@@ -296,7 +296,6 @@ ${previousOpinions}${sourcesContext}${seedContextStr}`
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
-    .slice(0, 80)
 
   // 5. Insert blog_post
   const { data: blogPost, error: blogError } = await supabase
