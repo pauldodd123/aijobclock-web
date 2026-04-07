@@ -13,6 +13,30 @@ type Props = {
   params: Promise<{ slug: string }>;
 };
 
+async function getRelatedPosts(currentSlug: string, sector: string) {
+  const supabase = await createClient();
+  // Try same sector first, excluding current post
+  const { data: sameSector } = await (supabase as any)
+    .from('blog_posts')
+    .select('slug, title, published_date, sector, summary')
+    .eq('sector', sector)
+    .neq('slug', currentSlug)
+    .order('published_date', { ascending: false })
+    .limit(3);
+
+  if (sameSector && sameSector.length >= 2) return sameSector;
+
+  // Fall back to most recent posts
+  const { data: recent } = await (supabase as any)
+    .from('blog_posts')
+    .select('slug, title, published_date, sector, summary')
+    .neq('slug', currentSlug)
+    .order('published_date', { ascending: false })
+    .limit(3);
+
+  return recent ?? [];
+}
+
 async function getBlogPost(slug: string) {
   const supabase = await createClient();
   const UUID_RE =
@@ -58,6 +82,8 @@ export default async function BlogPostPage({ params }: Props) {
   const { slug } = await params;
   const post = await getBlogPost(slug);
   if (!post) notFound();
+
+  const relatedPosts = await getRelatedPosts(post.slug, post.sector);
 
   const url = `https://aijobclock.com/blog/${post.slug}`;
   const description = post.summary || post.title;
@@ -119,6 +145,40 @@ export default async function BlogPostPage({ params }: Props) {
         <div className="prose prose-neutral dark:prose-invert max-w-none prose-headings:font-bold prose-headings:tracking-tight prose-headings:mt-8 prose-headings:mb-4 prose-a:text-accent prose-a:no-underline hover:prose-a:underline prose-p:leading-relaxed prose-p:mb-4 prose-li:leading-relaxed prose-blockquote:border-accent [&>*]:mb-4">
           <ReactMarkdown remarkPlugins={[remarkGfm]}>{post.content}</ReactMarkdown>
         </div>
+
+        {relatedPosts.length > 0 && (
+          <div className="mt-12 pt-8 border-t border-border">
+            <h2
+              className="text-lg font-bold tracking-tight mb-4"
+              style={{ fontFamily: 'var(--font-serif)' }}
+            >
+              Related Articles
+            </h2>
+            <ul className="space-y-4">
+              {relatedPosts.map((related: { slug: string; title: string; published_date: string; sector: string; summary?: string }) => (
+                <li key={related.slug}>
+                  <Link
+                    href={`/blog/${related.slug}`}
+                    className="group block rounded-lg border border-border p-4 hover:bg-muted transition-colors"
+                  >
+                    <div className="flex items-center gap-2 mb-1">
+                      <Badge variant="secondary" className="text-[10px]">{related.sector}</Badge>
+                      <span className="text-[11px] text-muted-foreground">
+                        {format(parseISO(related.published_date), 'MMM d, yyyy')}
+                      </span>
+                    </div>
+                    <p className="text-sm font-semibold group-hover:text-foreground transition-colors leading-snug">
+                      {related.title}
+                    </p>
+                    {related.summary && (
+                      <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{related.summary}</p>
+                    )}
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
       </article>
     </div>
   );

@@ -130,6 +130,21 @@ export default function Home() {
 
       <main>
       <HeroClock />
+
+      {/* SEO intro paragraph */}
+      <section className="border-b border-border py-8">
+        <div className="mx-auto max-w-3xl px-6">
+          <p className="text-sm text-foreground/70 leading-relaxed text-center">
+            AI Job Clock is a <strong>real-time employment tracker</strong> monitoring{' '}
+            <strong>AI job displacement</strong> across nine global sectors. As{' '}
+            <strong>job automation statistics</strong> shift daily, this live counter reflects the
+            latest <strong>AI workforce trends</strong> — drawing on ILO employment baselines,
+            aggregated news signals, and labor market research to visualize the scale of{' '}
+            <strong>AI-driven job displacement</strong> in real time.
+          </p>
+        </div>
+      </section>
+
       <NewsletterInlineCTA />
       <NewsFeed />
       <SectorBreakdown />

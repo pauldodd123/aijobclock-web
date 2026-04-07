@@ -66,9 +66,9 @@ export function HeroClock() {
         <p className="text-xs font-medium uppercase tracking-[0.3em] text-muted-foreground mb-6">
           Global Employment Observatory
         </p>
-        <h1 className="text-5xl sm:text-7xl md:text-8xl lg:text-9xl font-black leading-none tracking-tight mb-3" style={{ fontFamily: 'var(--font-serif)' }}>
+        <div className="text-5xl sm:text-7xl md:text-8xl lg:text-9xl font-black leading-none tracking-tight mb-3" style={{ fontFamily: 'var(--font-serif)' }}>
           <span className="text-foreground">{formattedNumber}</span>
-        </h1>
+        </div>
         <p className="text-sm text-muted-foreground mb-2">Estimated global employment · ILO baseline</p>
         {lastUpdated && <p className="text-[10px] text-muted-foreground/50 mb-10">Last updated {lastUpdated} UTC</p>}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 md:gap-6 mb-12 max-w-2xl mx-auto">
