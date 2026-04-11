@@ -1,5 +1,6 @@
 {
   "crons": [
+    { "path": "/api/scrape-news", "schedule": "0 5 * * *" },
     { "path": "/api/generate-daily-briefing?sector=Tech", "schedule": "0 6 * * *" },
     { "path": "/api/generate-daily-briefing?sector=Finance", "schedule": "2 6 * * *" },
     { "path": "/api/generate-daily-briefing?sector=Healthcare", "schedule": "4 6 * * *" },
